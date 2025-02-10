@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/test-python-binary"
+
+
+
+universal2_test() {
+    local python_version="$1"
+
+    test_binary_conditional "$python_version"
+    
+}

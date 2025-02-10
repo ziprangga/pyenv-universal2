@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+universal2_update() {
+    log "INFO" "Checking for updates to pyenv-universal2..."
+
+    local PLUGIN_DIR
+    PLUGIN_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.."
+
+    # Ensure Git is installed
+    if ! command -v git &>/dev/null; then
+        log "ERROR" "Git is not installed. Please install Git to update pyenv-universal2."
+        return 1
+    fi
+
+    # Ensure pyenv-universal2 is installed via Git
+    if [[ ! -d "$PLUGIN_DIR/.git" ]]; then
+        log "WARN" "pyenv-universal2 is not installed via Git. Please update manually."
+        log "INFO" "Download the latest version from: $PYENV_UNIVERSAL2_REPO"
+        return 1
+    fi
+
+    # Check internet connectivity before fetching updates
+    if ! curl -Is https://github.com/ | head -n 1 | grep -q "HTTP/"; then
+        log "ERROR" "Failed to reach GitHub. Please check your internet connection."
+        return 1
+    fi
+
+    # Fetch latest changes without modifying local files
+    git -C "$PLUGIN_DIR" fetch origin
+
+    # Get local and remote commit hashes
+    local LOCAL_COMMIT
+    local REMOTE_COMMIT
+    LOCAL_COMMIT=$(git -C "$PLUGIN_DIR" rev-parse HEAD)
+    REMOTE_COMMIT=$(git -C "$PLUGIN_DIR" rev-parse origin/main)
+
+    if [[ "$LOCAL_COMMIT" == "$REMOTE_COMMIT" ]]; then
+        log "INFO" "pyenv-universal2 is already up to date."
+        return 0
+    fi
+
+    log "INFO" "A new version is available! Updating pyenv-universal2..."
+
+    # Check for local changes before updating
+    if ! git -C "$PLUGIN_DIR" diff --quiet; then
+        log "WARN" "You have local changes. Stashing them before updating..."
+        git -C "$PLUGIN_DIR" stash push -m "Auto-stash before update"
+    fi
+
+    # Pull latest changes
+    if git -C "$PLUGIN_DIR" pull --rebase origin main; then
+        log "INFO" "✅ Updated pyenv-universal2 successfully!"
+    else
+        log "ERROR" "Failed to update pyenv-universal2. Please check for local conflicts."
+        return 1
+    fi
+}

@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/merge-python-binary"
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/rpath-updater" 
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/resolve-ext-dylib" 
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/test-python-binary"
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/clean-up-temp"
+
+
+universal2_merge() {
+    local python_version="$1"
+    local custom_suffix="$2"
+    local no_clean="$3"
+    local working_path="${4:-"$(pyenv root)/versions"}"
+
+    local output_dir="${working_path}/$custom_suffix"
+    if [[ "$DRY_RUN" == "true" ]]; then
+         color_echo "INFO" "Dry run mode: Skipping directory existence check."
+        local x86_dir="${working_path}/${python_version}-x86"
+        local arm_dir="${working_path}/${python_version}-arm"
+    else
+        local x86_dir=$(find "$working_path" -type d -name "${python_version}-x86" 2>/dev/null)
+        local arm_dir=$(find "$working_path" -type d -name "${python_version}-arm" 2>/dev/null)
+    fi
+
+    if [[ -n "$arm_dir" && -n "$x86_dir" ]]; then
+           color_echo "INFO" "found python for merging"     
+    else
+        color_echo "ERROR" "Error: Missing one or both required directories:"
+        [[ -z "$arm_dir" ]] && color_echo "ERROR" "python arm directory not found: ${python_version}-arm missing"
+        [[ -z "$x86_dir" ]] && color_echo "ERROR" "python x86 directory not found: ${python_version}-x86 missing"
+        [[ "$DRY_RUN" == "true" ]] && color_echo "INFO" "Dry run mode: Ignoring missing directories."
+        [[ "$DRY_RUN" != "true" ]] && exit 1
+    fi
+
+    log "INFO" "merge_binary \"$python_version\" \"$output_dir\" \"$x86_dir\" \"$arm_dir\""
+    merge_binary "$python_version" "$output_dir" "$x86_dir" "$arm_dir" || {
+        if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping merge validation."
+        else
+            log "Error: fat binary tests failed."
+            cleanup_temp "$output_dir"
+            exit 1
+        fi
+    }
+
+    log "INFO" "rpath_updater \"$python_version\" \"$output_dir\""
+    if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping update rpath."
+    else
+        rpath_updater "$python_version" "$output_dir"
+    fi
+
+    log "INFO" "update_ext_dylib_path \"$python_version\" \"$output_dir\""
+    if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping update ext dylib path."
+    else
+        update_ext_dylib_path "$python_version" "$output_dir"
+    fi
+
+    log "INFO" "test_binary_fat \"$output_dir\""
+    test_binary_fat "$output_dir" || {
+        if [[ "$DRY_RUN" == "true" ]]; then
+                color_echo "INFO" "Dry run mode, skipping test binary."
+        else
+            log "Error: fat binary tests failed."
+            cleanup_temp "$output_dir" 
+            exit 1
+        fi
+    }
+        
+    if [[ $no_clean == true ]]; then
+        color_echo "INFO" "Cleaning up temporary installations..."
+        if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping cleanup of temporary directories."
+        else
+            cleanup_temp "$x86_dir"
+            cleanup_temp "$arm_dir"
+        fi
+    fi
+
+    color_echo "INFO" "Process completed"
+
+}
+

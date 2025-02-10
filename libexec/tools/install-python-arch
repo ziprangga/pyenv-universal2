@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+install_python_arch() {
+    local arch="$1"
+    local python_version="$2"
+    local dep_path="$3"
+    local custom_suffix="$4"
+    local extra_params="$5"
+    
+    log "INFO" "Installing Python $python_version for $arch..."
+
+    # Eksport PATH
+    $DRY_RUN || export PATH="$dep_path:$PATH"
+    log "INFO" "Updated PATH: $dep_path:$PATH"
+
+
+    # Prepare for python installation  
+    local arch_cmd="arch -$arch"
+    local pyenv_cmd="pyenv install -s"
+    [[ "$VERBOSE" == true ]] && pyenv_cmd="$pyenv_cmd --verbose"
+
+    log "INFO" "Running command: $arch_cmd $pyenv_cmd $python_version"
+    $DRY_RUN || UNIVERSAL2_PYTHON_SUFFIX="$custom_suffix" $arch_cmd $pyenv_cmd "$python_version" $extra_params
+
+    local EXIT_CODE=$?
+    if [[ $EXIT_CODE -ne 0 ]]; then
+        log "INFO" "Python installation failed for $python_version on $arch."
+        return $EXIT_CODE
+    fi
+    log "INFO" "Command completed: $arch_cmd $pyenv_cmd $python_version"
+    return 0
+}

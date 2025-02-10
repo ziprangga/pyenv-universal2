@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/rpath-updater" 
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/resolve-ext-dylib" 
+
+
+
+universal2_rpath() {
+    local python_version="$1"
+    local python_path="$2"
+    
+
+    log "INFO" "rpath_updater \"$python_version\" \"$python_path\""
+    rpath_updater "$python_version" "$python_path"
+
+    log "INFO" "update_ext_dylib_path \"$python_version\" \"$python_path\""
+    update_ext_dylib_path "$python_version" "$python_path"
+    
+}

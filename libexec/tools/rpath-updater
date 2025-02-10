@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+
+# Function to update a single rpath
+update_rpath() {
+    local python_binary="$1"
+    local target_path="$2"
+
+     # Debugging the Python binary path
+    color_echo "DEBUG" "Checking Python binary at $python_binary"
+
+    # Check if the binary exists
+    if [[ ! -f "$python_binary" ]]; then
+        log "WARN" "Error: Python binary not found at $python_binary"
+        log "INFO" "Please verify the Python version and binary path."
+        exit 1
+    fi
+
+    # Get the list of linked libraries (filter for Homebrew paths)
+    libraries=$(otool -L "$python_binary" | tail -n +2 | awk '{print $1}' | grep -vE '^\s*(/System|/usr/lib|/opt/homebrew/opt|/usr/local/opt)')
+
+    # Loop through libraries and copy to architecture-specific folders
+    while read -r library; do
+        if [[ -f "$library" && "$library" != "$target_path"  ]]; then
+            if [[ "$library" == */lib/* ]]; then
+                # Extract the base name of the library
+                local base_name=$(basename "$library")
+                # Copy the library to the folder
+                $DRY_RUN || install_name_tool -change "$library" "${target_path}/lib/${base_name}" "$python_binary"
+                log "INFO" "update rpath $library to $arch_folder"
+            fi
+            
+        else
+            log "WARN" "Warning: $library is not a valid file, skipping."
+        fi
+    done <<< "$libraries"
+}
+
+update_lc_rpath() {
+    local python_binary="$1"
+    local target_path="$2"
+
+     # Debugging the Python binary path
+    color_echo "DEBUG" "Checking Python binary at $python_binary"
+
+    # Check if the binary exists
+    if [[ ! -f "$python_binary" ]]; then
+        log "WARN" "Error: Python binary not found at $python_binary"
+        log "INFO" "Please verify the Python version and binary path."
+        exit 1
+    fi
+
+    # Extract LC_RPATH entries from the binary
+    rpaths=$(otool -l "$python_binary" | awk '/cmd LC_RPATH/,/path/' | grep path | awk '{print $2}')
+
+    log "INFO" "Existing LC_RPATH entries in $python_binary:"
+    log "INFO" "$rpaths"
+
+    # Loop through each LC_RPATH path and update based on conditions
+    while IFS= read -r library || [[ -n "$library" ]]; do
+       
+        if [[ $library == "/opt/homebrew/lib" || $library == "/usr/local/lib" ]]; then
+            # Update the RPATH to the "fat" version
+            log "INFO" "Updating LC_RPATH: $library -> ${target_path}/deps"
+            $DRY_RUN || install_name_tool -rpath "$library" "${target_path}/deps" "$python_binary"
+            if [[ $? -eq 0 ]]; then
+                log "INFO" "Successfully updated LC_RPATH: $library -> ${target_path}/deps"
+            else
+                log "WARN" "Error: Failed to update LC_RPATH for $library."
+                exit 1
+            fi
+        elif [[ $library != "${target_path}/lib" ]]; then
+            
+            log "INFO" "Updating LC_RPATH: $library -> ${target_path}/lib"
+            $DRY_RUN || install_name_tool -rpath "$library" "${target_path}/lib" "$python_binary"
+            if [[ $? -eq 0 ]]; then
+                log "INFO" "Successfully updated LC_RPATH: $library -> ${target_path}/lib"
+            else
+                log "WARN" "Error: Failed to update LC_RPATH for $library."
+                exit 1
+            fi
+        else
+            log "WARN" "LC_RPATH $library does not match criteria, skipping."
+        fi
+    done <<< "$rpaths"
+}
+
+update_fat_binary_rpath() {
+    local python_binary="$1"
+    local target_path="$2"
+    # define working area
+    local temp_folder="$target_path/temp"
+
+    $DRY_RUN || mkdir -p "$temp_folder"
+
+    # Extract architectures
+    $DRY_RUN || lipo -extract x86_64 "$python_binary" -output "$temp_folder/python_x86_64"
+    $DRY_RUN || lipo -extract arm64 "$python_binary" -output "$temp_folder/python_arm64"
+
+    # Update RPATH for each architecture slice
+    $DRY_RUN || update_lc_rpath "$temp_folder/python_x86_64" "$target_path" 
+    $DRY_RUN || update_lc_rpath "$temp_folder/python_arm64" "$target_path" 
+
+    # Combine the modified slices back into a fat binary
+    $DRY_RUN || lipo -create "$temp_folder/python_x86_64" "$temp_folder/python_arm64" -output "$python_binary"
+
+    $DRY_RUN || rm -rf "$temp_folder"
+    log "INFO" "Successfully updated RPATH for all architectures in $python_binary"
+}
+
+
+rpath_updater(){
+    local python_version="$1"
+    local python_path="$2"
+
+    # define work area
+    local target_path="$python_path"
+    local minor_version=$(echo "$python_version" | cut -d. -f1,2)
+    local python_binary="$python_path/bin/python${minor_version}"
+
+    update_rpath "$python_binary" "$target_path" 
+    update_fat_binary_rpath "$python_binary" "$target_path"
+}
+

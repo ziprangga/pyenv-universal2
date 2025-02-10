@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+
+# Load 
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/validate-dual-brew"
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/install-python-arch" 
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/merge-python-binary"
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/rpath-updater" 
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/resolve-ext-dylib" 
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/test-python-binary"
+source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/clean-up-temp" 
+
+# Check for required commands
+check_required_commands() {
+    log "INFO" "Checking required commands..."
+    local required_commands=("lipo" "pyenv" "arch")
+    for cmd in "${required_commands[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || { log "ERROR" "Error: $cmd is not installed."; exit 1; }
+    done
+}
+
+
+build_universal2_python() {
+    local python_version="$1"
+    local custom_suffix="$2"
+    local no_clean="$3"
+    local working_path="${4:-"$(pyenv root)/versions"}"
+
+    check_required_commands
+
+    local x86_brew_path=${x86_brew_path:-/usr/local/bin}
+    local arm_brew_path=${arm_brew_path:-/opt/homebrew/bin}
+    validate_dual_brew_setup "$arm_brew_path" "$x86_brew_path" || {
+        log "INFO" "Dual Brew setup validation failed."
+        exit 1
+    }
+
+    local output_dir="${working_path}/${custom_suffix}"
+    local x86_dir="${working_path}/${python_version}-x86"
+    local arm_dir="${working_path}/${python_version}-arm"
+    local arch_x86="x86_64"
+    local arch_arm="arm64"
+
+    color_echo "INFO" "Step 1: Installing Python for x86_64..."
+    install_python_arch "$arch_x86" "$python_version" "$x86_brew_path" "$custom_suffix"
+    if [[ -z "$DRY_RUN" || "$DRY_RUN" == "false" ]]; then
+        mv "$output_dir" "$x86_dir"
+        log "INFO" "mv \"$output_dir\" \"$x86_dir\""
+    else
+        color_echo "INFO" "Dry run mode, skipping move of x86 directory."
+    fi
+   
+    color_echo "INFO" "Step 2: Installing Python for ARM64..."  
+    install_python_arch "$arch_arm" "$python_version" "$arm_brew_path" "$custom_suffix"
+    if [[ -z "$DRY_RUN" || "$DRY_RUN" == "false" ]]; then
+        mv "$output_dir" "$arm_dir"
+        log "INFO" "mv \"$output_dir\" \"$arm_dir\""
+    else
+        color_echo "INFO" "Dry run mode, skipping move of arm directory."
+    fi
+    
+    color_echo "INFO" "Step 3: Merging Python...." 
+    log "INFO" "merge_binary \"$python_version\" \"$output_dir\" \"$x86_dir\" \"$arm_dir\""
+    merge_binary "$python_version" "$output_dir" "$x86_dir" "$arm_dir" || {
+        if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping merge validation."
+        else
+            color_echo "ERROR" "Error: fat binary tests failed."
+            cleanup_temp "$x86_dir"
+            cleanup_temp "$output_dir"
+            cleanup_temp "$arm_dir"
+            exit 1
+        fi
+    }
+        
+
+    log "INFO" "rpath_updater \"$python_version\" \"$output_dir\""
+    if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping update rpath."
+    else
+        rpath_updater "$python_version" "$output_dir"
+    fi
+
+    log "INFO" "update_ext_dylib_path \"$python_version\" \"$output_dir\""
+    if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping update ext dylib path."
+    else
+        update_ext_dylib_path "$python_version" "$output_dir"
+    fi
+
+
+    color_echo "INFO" "Step 4: Testing the fat binary..."
+    log "INFO" "test_binary_fat \"$output_dir\""
+    test_binary_fat "$output_dir" || {
+        if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping test binary."
+        else
+            color_echo "ERROR" "Error: fat binary tests failed."
+            cleanup_temp "$x86_dir"
+            cleanup_temp "$output_dir"
+            cleanup_temp "$arm_dir"
+            exit 1
+        fi
+    }
+
+    if [[ $no_clean == true ]]; then
+        color_echo "INFO" "Step 5: Cleaning up temporary installations..."
+        if [[ "$DRY_RUN" == "true" ]]; then
+            color_echo "INFO" "Dry run mode, skipping cleanup of temporary directories."
+        else
+            cleanup_temp "$x86_dir"
+            cleanup_temp "$arm_dir"
+        fi
+    fi
+
+    color_echo "INFO" "Process completed"
+    
+}
+
+
+
+

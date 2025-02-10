@@ -1,0 +1,355 @@
+#!/usr/bin/env bash
+
+# ====== Global Variable ======
+VERSION="1.0.0"
+RELEASE_DATE="2025-02-09"
+PYENV_UNIVERSAL2_REPO="https://github.com/ziprangga/pyenv-universal2"
+DEBUG=false
+DRY_RUN=false
+VERBOSE=false
+WITHOUT_SUFFIX=false
+NO_CLEAN=true
+SUFFIX=""
+ALIAS=""
+readonly BASE_COMMAND="pyenv-universal2"
+readonly commands=("build" "merge" "arm64" "x86_64" "rpath" "test" "update" "version" "help")
+
+
+# ====== Logging ======
+log() {
+    local level="$1"
+    local message="$2"
+    local color_reset="\033[0m"
+    local color_info="\033[0;32m"
+    local color_warn="\033[0;33m"
+    local color_error="\033[0;31m"
+    local prefix="[$BASE_COMMAND]"
+
+    # Handle dry-run mode
+    if [[ "$DRY_RUN" == "true" ]]; then
+        prefix="[$BASE_COMMAND-dry run mode]"
+    fi
+
+    # Skip logging if DEBUG mode is off (except for errors)
+    if [[ "$DEBUG" != "true" && "$level" != "ERROR" ]]; then
+        return
+    fi
+
+    # Determine log level color
+    case "$level" in
+        INFO)  echo -e "${prefix} ${color_info}$message${color_reset}" ;;
+        WARN)  echo -e "${prefix} ${color_warn}$message${color_reset}" ;;
+        ERROR) echo -e "${prefix} ${color_error}$message${color_reset}" ;;
+        *)     echo -e "${prefix} $level" ;;
+    esac
+
+    # Verbose mode: Print extra debug info
+    if [[ "$VERBOSE" == "true" ]]; then
+        echo -e "[VERBOSE] $level: $message" >&2
+    fi
+}
+
+color_echo() {
+    local color_reset="\033[0m"
+    local color_info="\033[0;32m"
+    local color_warn="\033[0;33m"
+    local color_error="\033[0;31m"
+    local color_debug="\033[0;34m"
+    local message_type="$1"
+    shift  
+
+    case "$message_type" in
+        INFO)    echo -e "${color_info}$@${color_reset}" ;;
+        WARN)    echo -e "${color_warn}$@${color_reset}" ;;
+        ERROR)   echo -e "${color_error}$@${color_reset}" ;;
+        DEBUG)   echo -e "${color_debug}$@${color_reset}" ;;
+        *)       echo -e "$@" ;;
+    esac
+}
+
+# ====== Load Core Script ======
+load_core_script() {
+    local SCRIPT_NAME="$1"
+    local CORE_DIR="$(dirname "${BASH_SOURCE[0]}")/../libexec"
+    local SCRIPT_PATH="$CORE_DIR/$SCRIPT_NAME"
+
+    if [[ -f "$SCRIPT_PATH" ]]; then
+        log "INFO" "Loading core script: $SCRIPT_PATH"
+        source "$SCRIPT_PATH"
+    else
+        log "ERROR" "Core script '$SCRIPT_NAME' not found in $CORE_DIR"
+        exit 1
+    fi
+}
+
+# ====== Parse Global Options ======
+parse_global_options() {
+    REMAINING_ARGS=()
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --debug) DEBUG=true ;;
+            --dry-run) DRY_RUN=true ;;
+            --verbose) VERBOSE=true ;;
+            --without-suffix) WITHOUT_SUFFIX=true ;;
+            --no-clean) NO_CLEAN=false ;;
+            --suffix=*) SUFFIX="${1#*=}" ;;
+            --alias=*) ALIAS="${1#*=}" ;;
+            --help)
+                help_command
+                exit 0
+                ;;
+            -*)
+                echo "Unknown option: $1" >&2
+                exit 1
+                ;;
+            *) REMAINING_ARGS+=("$1") ;; 
+        esac
+        shift
+    done
+
+}
+
+# ====== Function ======
+build_command() {
+    local python_version="$1"
+    shift
+
+    if [[ -z "$python_version" ]]; then
+        color_echo "ERROR" "Error: 'build' requires a Python version as an argument." >&2
+        exit 1
+    fi
+
+    if ! pyenv install -l --bare | grep -q "$python_version"; then
+        color_echo "ERROR" "Error: Invalid Python version '$python_version'." >&2
+        color_echo "INFO" "Hint: Use 'pyenv install -l' to see a list of valid Python versions." >&2
+        exit 1
+    fi
+
+    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -z $ALIAS ]]; then
+        local custom_suffix="${python_version}-$SUFFIX"
+    elif [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -n $ALIAS ]]; then
+        color_echo "INFO" "Build python fat binary with alias"
+        local custom_suffix="$ALIAS"
+    elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then
+        local custom_suffix="${python_version}-universal"
+    else
+        color_echo "INFO" "Build python fat binary without suffix"
+        local custom_suffix="${python_version}"
+    fi
+
+    local no_clean="$NO_CLEAN"
+
+    if ! declare -F universal2-build >/dev/null; then
+        log "INFO" "Loading core script for fat binary build"
+        load_core_script "universal2-build"
+    fi
+
+    build_universal2_python "$python_version" "$custom_suffix" "$no_clean" "$@"
+}
+
+single_command() {
+    local arch="$1"
+    local python_version="$2"
+    shift 2
+
+
+    if [[ -z "$python_version" ]]; then
+        color_echo "ERROR" "Error: Python version is required."
+        exit 1
+    fi
+
+    if ! pyenv install -l --bare | grep -q "$python_version"; then
+        color_echo "ERROR" "Error: Invalid Python version '$python_version'." >&2
+        color_echo "INFO" "Hint: Use 'pyenv install -l' to see a list of valid Python versions." >&2
+        exit 1
+    fi
+
+    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -z $ALIAS ]]; then
+        local custom_suffix="${python_version}-$SUFFIX"
+    elif [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -n $ALIAS ]]; then
+        color_echo "INFO" "install python with alias"
+        local custom_suffix="$ALIAS"
+    elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then
+        if [[ $arch == "x86_64" ]]; then
+            local custom_suffix="${python_version}-x86"
+        elif [[ $arch == "arm64" ]]; then
+            local custom_suffix="${python_version}-arm"
+        else
+            color_echo "ERROR" "Unsupported architecture: $arch"
+            exit 1
+        fi
+    else
+        color_echo "INFO" "install python without suffix"
+        local custom_suffix="${python_version}"
+    fi
+
+    log "INFO" "Starting single build for architecture: $arch with Python version: $python_version"
+
+    if ! declare -F universal2-single >/dev/null; then
+        log "INFO" "Loading core script for single binary build"
+        load_core_script "universal2-single"
+    fi
+
+    universal2_single_build "$arch" "$python_version" "$custom_suffix" "$@" 
+}
+
+arm64_command() {
+    single_command "arm64" "$@"
+}
+
+x86_64_command() {
+    single_command "x86_64" "$@"
+}
+
+merge_command() {
+    local python_version="$1"
+    shift
+
+    if [[ -z "$python_version" ]]; then
+        color_echo "ERROR" "Error: 'merge' requires at least one argument." >&2
+        exit 1
+    fi
+
+    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -z $ALIAS ]]; then
+        local custom_suffix="${python_version}-$SUFFIX"
+    elif [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -n $ALIAS ]]; then
+        color_echo "INFO" "Merge python fat binary with alias"
+        local custom_suffix="$ALIAS"
+    elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then
+        local custom_suffix="${python_version}-universal"
+    else
+        color_echo "INFO" "Merge python fat binary without suffix"
+        local custom_suffix="${python_version}"
+    fi
+
+    local no_clean="$NO_CLEAN"
+
+    if ! declare -F universal2-merge >/dev/null; then
+        log "INFO" "Loading core script for merge python"
+        load_core_script "universal2-merge"
+    fi
+ 
+    universal2_merge "$python_version" "$custom_suffix" "$no_clean" "$@"
+}
+
+test_command() {
+    local python_version="$1"
+    shift
+
+     if [[ -z "$python_version" ]]; then
+        color_echo "ERROR" "Error: 'test' requires at least one argument." >&2
+        exit 1
+    fi
+
+    if ! declare -F universal2-test >/dev/null; then
+        log "INFO" "Loading core script for test binary of python"
+        load_core_script "universal2-test"
+    fi
+ 
+    universal2_test "$python_version" "$@"
+}
+
+rpath_command() {
+    local python_version="$1"
+    shift
+
+     if [[ -z "$python_version" ]]; then
+        color_echo "ERROR" "Error: 'rpath' requires at least one argument." >&2
+        exit 1
+    fi
+
+    local python_path
+    if [[ $# -gt 0 ]]; then
+        python_path="$1"
+    else
+        python_path="$(pyenv root)/versions/$python_version"
+    fi
+
+    if ! declare -F universal2-rpath >/dev/null; then
+        log "INFO" "Loading core script for change rpath python"
+        load_core_script "universal2-rpath"
+    fi
+ 
+    universal2_rpath "$python_version" "$python_path"
+}
+
+update_command() {
+    if ! declare -F universal2-update >/dev/null; then
+        log "INFO" "Loading for update pyenv-universal2"
+        load_core_script "universal2-update"
+    fi
+ 
+    universal2_update
+}
+
+version_command() {
+    color_echo "WARN" "pyenv-universal2 version $VERSION"
+    color_echo "INFO" "Released: $RELEASE_DATE"
+    color_echo "INFO" "Author: zi"
+}
+
+help_command() {
+    echo "Available commands:"
+    for cmd in "${commands[@]}"; do
+        echo "  $cmd"
+    done
+
+    echo "pyenv-universal2: A utility for building and managing Python fat binaries."
+    echo "Usage: $BASE_COMMAND [global-options] <command> [args]"
+    echo "Global Options:"
+    echo "  --dry-run         Simulate actions without making changes"
+    echo "  --verbose         Enable verbose output"
+    echo "  --without-suffix  Skip adding suffix to output files"
+    echo "  --no-clean        Keep python arm version and x86 version when merging and build python fat binary"
+    echo "  --suffix=<suffix> Add a custom suffix to output files"
+    echo "  --help            Show this help message"
+    echo ""
+    echo "Commands:"
+    echo "  build             Build a universal Python binary"
+    echo "  merge             Merge single binaries into a universal binary"
+    echo "  arm64             Build a single binary for ARM64"
+    echo "  x86_64            Build a single binary for x86_64"
+    echo "  version           Show version information"
+    echo "  help              Show this help message"
+    echo "  test              Test the built binaries"
+}
+
+# ====== Dynamic Dispatcher ======
+command_dispatcher() {
+    local COMMAND="$1"
+    shift
+
+    if [[ " ${commands[*]} " =~ " $COMMAND " ]]; then
+        "${COMMAND}_command" "$@"
+    else
+        color_echo "ERROR" "Error: Unknown command '$COMMAND'"
+        color_echo "WARN" "Use '$BASE_COMMAND help' for a list of commands."
+        exit 1
+    fi
+}
+
+# ====== Main Function ======
+main() {
+    if [[ $# -lt 1 ]]; then
+        color_echo "WARN" "Usage: $BASE_COMMAND [global-options] <command> [args]"
+        color_echo "INFO" "Use '$BASE_COMMAND help' for more details."
+        exit 1
+    fi
+
+    # Parse global options
+    parse_global_options "$@"
+
+    # check and run the function
+    if [[ ${#REMAINING_ARGS[@]} -lt 1 ]]; then
+        color_echo "ERROR" "Error: No command specified." >&2
+        color_echo "INFO" "Use '$BASE_COMMAND help' for more details."
+        exit 1
+    fi
+
+    local COMMAND="${REMAINING_ARGS[0]}"
+    shift
+    command_dispatcher "$COMMAND" "${REMAINING_ARGS[@]:1}"
+}
+
+# ====== Jalankan Main ======
+main "$@"

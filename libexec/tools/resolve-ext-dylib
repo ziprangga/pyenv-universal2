@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+
+copy_and_merge() {
+    local python_binary="$1"
+    local target_folder="$2"
+    # define work directory
+    local temp_folder="$target_folder/temp"
+
+    # Debugging the Python binary path
+    color_echo "DEBUG" "Checking Python binary at $python_binary"
+
+    # Check if the binary exists
+    if [[ ! -f "$python_binary" ]]; then
+        log "WARN" "Error: Python binary not found at $python_binary"
+        log "INFO" "Please verify the Python version and binary path."
+        exit 1
+    fi
+
+    # Ensure the target and merged folders exist
+    $DRY_RUN || mkdir -p "$temp_folder"
+    $DRY_RUN || mkdir -p "$target_folder"
+
+    color_echo "INFO" "Scanning $python_binary for external libraries..."
+
+    # Get the list of linked libraries (filter for Homebrew paths)
+    libraries=$(otool -L "$python_binary" | tail -n +2 | awk '{print $1}' | grep -E '^/opt/homebrew/opt|^/usr/local/opt')
+
+    # Loop through libraries and copy to architecture-specific folders
+    while read -r library; do
+        if [[ -f "$library" ]]; then
+            # Get the architecture of the library using `lipo`
+            archs=$(lipo -info "$library" | grep -oE 'arm64|x86_64')
+
+            # Loop through architectures and copy to respective folders
+            for arch in $archs; do
+                # Extract the base name of the library
+                local base_name=$(basename "$library")
+
+                # Define the architecture-specific folder
+                local arch_folder="${temp_folder}/${base_name}-${arch}"
+
+                # Create the architecture-specific folder
+                $DRY_RUN || mkdir -p "$arch_folder"
+
+                # Copy the library to the folder
+                $DRY_RUN || cp "$library" "$arch_folder"
+                log "INFO" "Copied $library to $arch_folder"
+            done
+        else
+            log "WARN" "Warning: $library is not a valid file, skipping."
+        fi
+    done <<< "$libraries"
+
+    color_echo "INFO" "All Homebrew libraries copied to architecture-specific folders in $temp_folder."
+
+    # Merge architecture-specific libraries into fat binaries
+    color_echo "INFO" "Merging architecture-specific libraries into fat binaries..."
+    for arm_folder in "$temp_folder"/*-arm64; do
+        # Get the base name of the folder (strip the -arm64 suffix)
+        local base_name=$(basename "$arm_folder" "-arm64")
+        local x86_folder="${temp_folder}/${base_name}-x86_64"
+        local merged_file="${target_folder}/${base_name}"
+
+        # Check if the corresponding -x86_64 folder exists
+        if [[ -d "$x86_folder" ]]; then
+            # Find all binaries in the architecture-specific folders
+            local arm_binary=$(find "$arm_folder" -type f | head -n 1) # Assume one binary per folder
+            local x86_binary=$(find "$x86_folder" -type f | head -n 1)
+
+            if [[ -f "$arm_binary" && -f "$x86_binary" ]]; then
+                log "INFO" "Merging $arm_binary and $x86_binary into $merged_file"
+                $DRY_RUN || lipo -create "$arm_binary" "$x86_binary" -output "$merged_file"
+                log "INFO" "Merged $base_name saved as $merged_file"
+            else
+                log "WARN" "Skipping $base_name: Missing binaries in folders."
+            fi
+        else
+            log "WARN" "Skipping $base_name: Missing corresponding x86_64 folder."
+        fi
+    done
+    color_echo "INFO" "All libraries merged into $target_folder."
+
+    color_echo "INFO" "cleanup temp"
+    $DRY_RUN || rm -rf "$temp_folder"
+}
+
+update_ext_rpath(){
+    local python_binary="$1"
+    local target_folder="$2"
+    # define work directory
+    local temp_folder="$target_folder/temp"
+
+    # Debugging the Python binary path
+    color_echo "DEBUG" "Checking Python binary at $python_binary"
+
+    # Check if the binary exists
+    if [[ ! -f "$python_binary" ]]; then
+        log "WARN" "Error: Python binary not found at $python_binary"
+        log "INFO" "Please verify the Python version and binary path."
+        exit 1
+    fi
+
+    color_echo "INFO" "Scanning $python_binary for external libraries..."
+
+    # Get the list of linked libraries (filter for Homebrew paths)
+    libraries=$(otool -L "$python_binary" | tail -n +2 | awk '{print $1}' | grep -E '^/opt/homebrew/opt|^/usr/local/opt')
+
+    # Loop through libraries and copy to architecture-specific folders
+    while read -r library; do
+        if [[ -f "$library" ]]; then
+            # Get the architecture of the library using `lipo`
+            archs=$(lipo -info "$library" | grep -oE 'arm64|x86_64')
+
+            # Loop through architectures and copy to respective folders
+            for arch in $archs; do
+                # Extract the base name of the library
+                local base_name=$(basename "$library")
+
+                # Define the architecture-specific folder
+                local arch_folder="${temp_folder}/${base_name}-${arch}"
+
+                # Copy the library to the folder
+                $DRY_RUN || install_name_tool -change "$library" "${target_folder}/${base_name}" "$python_binary"
+                log "INFO" "Copied $library to $arch_folder"
+            done
+        else
+            log "WARN" "Warning: $library is not a valid file, skipping."
+        fi
+    done <<< "$libraries"
+
+}
+
+update_ext_dylib_path(){
+    local python_version="$1"
+    local python_path="$2"
+
+    # variable
+    local target_folder="$python_path/deps"
+    local minor_version=$(echo "$python_version" | cut -d. -f1,2)
+    local python_binary="$python_path/bin/python${minor_version}"
+
+    copy_and_merge "$python_binary" "$target_folder"
+    update_ext_rpath "$python_binary" "$target_folder"
+
+
+}

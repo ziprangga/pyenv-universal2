@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 
 universal2_update() {
-    log "INFO" "Checking for updates to pyenv-universal2..."
+    color_echo "INFO" "Checking for updates to pyenv-universal2..."
 
     local PLUGIN_DIR
-    PLUGIN_DIR="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/.."
+    PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
     # Ensure Git is installed
     if ! command -v git &>/dev/null; then
-        log "ERROR" "Git is not installed. Please install Git to update pyenv-universal2."
+        color_echo "ERROR" "Git is not installed. Please install Git to update pyenv-universal2."
         return 1
     fi
 
     # Ensure pyenv-universal2 is installed via Git
     if [[ ! -d "$PLUGIN_DIR/.git" ]]; then
-        log "WARN" "pyenv-universal2 is not installed via Git. Please update manually."
-        log "INFO" "Download the latest version from: $PYENV_UNIVERSAL2_REPO"
+        color_echo "WARN" "pyenv-universal2 is not installed via Git. Please update manually."
+        color_echo "INFO" "Download the latest version from: $PYENV_UNIVERSAL2_REPO"
         return 1
     fi
 
     # Check internet connectivity before fetching updates
     if ! curl -Is https://github.com/ | head -n 1 | grep -q "HTTP/"; then
-        log "ERROR" "Failed to reach GitHub. Please check your internet connection."
+        color_echo "ERROR" "Failed to reach GitHub. Please check your internet connection."
         return 1
     fi
 
@@ -40,9 +40,9 @@ universal2_update() {
 
     # Check if an update is needed
     if git -C "$PLUGIN_DIR" status -uno | grep -q "Your branch is behind"; then
-        log "INFO" "A new version is available! Updating pyenv-universal2..."
+        color_echo "INFO" "A new version is available! Updating pyenv-universal2..."
     else
-        log "INFO" "pyenv-universal2 is already up to date."
+        color_echo "INFO" "pyenv-universal2 is already up to date."
         return 0
     fi
 
@@ -56,9 +56,9 @@ universal2_update() {
 
     # Perform update with rebase
     if git -C "$PLUGIN_DIR" pull --rebase origin "$CURRENT_BRANCH"; then
-        log "INFO" "✅ Updated pyenv-universal2 successfully!"
+        color_echo "INFO" "✅ Updated pyenv-universal2 successfully!"
     else
-        log "ERROR" "Failed to update pyenv-universal2. Please check for local conflicts."
+        color_echo "ERROR" "Failed to update pyenv-universal2. Please check for local conflicts."
         return 1
     fi
 

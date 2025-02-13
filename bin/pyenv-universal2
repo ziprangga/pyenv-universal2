@@ -17,6 +17,11 @@ readonly commands=("build" "merge" "arm64" "x86_64" "rpath" "test" "update" "ver
 
 # ====== Logging ======
 log() {
+
+    if [[ "$DEBUG" == "false" ]]; then
+        return
+    fi
+
     local level="$1"
     local message="$2"
     local color_reset="\033[0m"
@@ -28,11 +33,6 @@ log() {
     # Handle dry-run mode
     if [[ "$DRY_RUN" == "true" ]]; then
         prefix="[$BASE_COMMAND-dry run mode]"
-    fi
-
-    # Skip logging if DEBUG mode is off (except for errors)
-    if [[ "$DEBUG" != "true" && "$level" != "ERROR" ]]; then
-        return
     fi
 
     # Determine log level color

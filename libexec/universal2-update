@@ -25,33 +25,46 @@ universal2_update() {
         return 1
     fi
 
-    # Fetch latest changes without modifying local files
+    # Fetch latest changes
     git -C "$PLUGIN_DIR" fetch origin
 
-    # Get local and remote commit hashes
-    local LOCAL_COMMIT
-    local REMOTE_COMMIT
-    LOCAL_COMMIT=$(git -C "$PLUGIN_DIR" rev-parse HEAD)
-    REMOTE_COMMIT=$(git -C "$PLUGIN_DIR" rev-parse origin/main)
+    # Determine current branch
+    local CURRENT_BRANCH
+    CURRENT_BRANCH=$(git -C "$PLUGIN_DIR" rev-parse --abbrev-ref HEAD)
 
-    if [[ "$LOCAL_COMMIT" == "$REMOTE_COMMIT" ]]; then
+    # Prevent direct updates to main or stable
+    if [[ "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "stable" ]]; then
+        log "ERROR" "Direct updates to '$CURRENT_BRANCH' are not allowed. Please switch to a different branch."
+        return 1
+    fi
+
+    # Check if an update is needed
+    if git -C "$PLUGIN_DIR" status -uno | grep -q "Your branch is behind"; then
+        log "INFO" "A new version is available! Updating pyenv-universal2..."
+    else
         log "INFO" "pyenv-universal2 is already up to date."
         return 0
     fi
 
-    log "INFO" "A new version is available! Updating pyenv-universal2..."
-
-    # Check for local changes before updating
+    # Stash local changes if necessary
+    local STASH_APPLIED=0
     if ! git -C "$PLUGIN_DIR" diff --quiet; then
         log "WARN" "You have local changes. Stashing them before updating..."
         git -C "$PLUGIN_DIR" stash push -m "Auto-stash before update"
+        STASH_APPLIED=1
     fi
 
-    # Pull latest changes
-    if git -C "$PLUGIN_DIR" pull --rebase origin main; then
+    # Perform update with rebase
+    if git -C "$PLUGIN_DIR" pull --rebase origin "$CURRENT_BRANCH"; then
         log "INFO" "✅ Updated pyenv-universal2 successfully!"
     else
         log "ERROR" "Failed to update pyenv-universal2. Please check for local conflicts."
         return 1
+    fi
+
+    # Restore stashed changes if applicable
+    if [[ "$STASH_APPLIED" -eq 1 ]]; then
+        log "INFO" "Restoring your previous changes..."
+        git -C "$PLUGIN_DIR" stash pop || log "WARN" "Failed to restore stashed changes."
     fi
 }

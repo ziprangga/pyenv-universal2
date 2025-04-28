@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+# Set the root directory relative to the script's location
+BREW_DUAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# File to store custom Homebrew paths
+CUSTOM_BREW_PATHS_FILE="$BREW_DUAL_ROOT/.custom_brew_paths"
+
+# Function to add custom Homebrew paths dynamically and save them to the file
+add_custom_brew_path() {
+    # Capture the named parameters into local variables
+    local arm_brew=""
+    local x86_brew=""
+
+    # Loop through provided arguments and assign to named parameters
+    for arg in "$@"; do
+        case $arg in
+            arm_brew=*) arm_brew="${arg#*=}" ;;
+            x86_brew=*) x86_brew="${arg#*=}" ;;
+        esac
+    done
+
+    # Check if at least one of the paths is provided
+    if [[ -z "$arm_brew" && -z "$x86_brew" ]]; then
+        color_echo "ERROR" "Error: 'custom-brew' requires at least one of arm_brew or x86_brew paths." >&2
+        color_echo "INFO" "Usage: custom-brew <arm_brew_path> <x86_brew_path>"
+        exit 1
+    fi
+
+    # If the file exists, load its contents
+    if [[ -f "$CUSTOM_BREW_PATHS_FILE" ]]; then
+        # Check if the ARM path exists and is different
+        if grep -q "CUSTOM_ARM_BREW=" "$CUSTOM_BREW_PATHS_FILE"; then
+            current_arm_brew=$(grep "CUSTOM_ARM_BREW=" "$CUSTOM_BREW_PATHS_FILE" | cut -d'=' -f2)
+            if [[ "$current_arm_brew" != "$arm_brew" ]]; then
+                # Replace with the new ARM path if it's different
+                sed -i '' "s|^CUSTOM_ARM_BREW=.*|CUSTOM_ARM_BREW=$arm_brew|" "$CUSTOM_BREW_PATHS_FILE"
+                echo "INFO" "Updated ARM Homebrew path to: $arm_brew"
+            else
+                echo "INFO" "ARM Homebrew path is already set to: $arm_brew"
+            fi
+        else
+            echo "CUSTOM_ARM_BREW=$arm_brew" >> "$CUSTOM_BREW_PATHS_FILE"
+            echo "INFO" "Added ARM Homebrew path: $arm_brew"
+        fi
+
+        # Check if the x86 path exists and is different
+        if grep -q "CUSTOM_X86_BREW=" "$CUSTOM_BREW_PATHS_FILE"; then
+            current_x86_brew=$(grep "CUSTOM_X86_BREW=" "$CUSTOM_BREW_PATHS_FILE" | cut -d'=' -f2)
+            if [[ "$current_x86_brew" != "$x86_brew" ]]; then
+                # Replace with the new x86 path if it's different
+                sed -i '' "s|^CUSTOM_X86_BREW=.*|CUSTOM_X86_BREW=$x86_brew|" "$CUSTOM_BREW_PATHS_FILE"
+                echo "INFO" "Updated x86 Homebrew path to: $x86_brew"
+            else
+                echo "INFO" "x86 Homebrew path is already set to: $x86_brew"
+            fi
+        else
+            echo "CUSTOM_X86_BREW=$x86_brew" >> "$CUSTOM_BREW_PATHS_FILE"
+            echo "INFO" "Added x86 Homebrew path: $x86_brew"
+        fi
+    else
+        # If file doesn't exist, create it and add the paths
+        echo "CUSTOM_ARM_BREW=$arm_brew" > "$CUSTOM_BREW_PATHS_FILE"
+        echo "CUSTOM_X86_BREW=$x86_brew" >> "$CUSTOM_BREW_PATHS_FILE"
+        echo "INFO" "Created new custom brew paths file and added paths."
+    fi
+}

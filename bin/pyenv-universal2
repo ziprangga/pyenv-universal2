@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
 
-# ====== Global Variable ======
-VERSION="1.0.0"
-RELEASE_DATE="2025-02-09"
-PYENV_UNIVERSAL2_REPO="https://github.com/ziprangga/pyenv-universal2"
-DEBUG=false
-DRY_RUN=false
-VERBOSE=false
-WITHOUT_SUFFIX=false
-NO_CLEAN=true
-SUFFIX=""
-ALIAS=""
-readonly BASE_COMMAND="pyenv-universal2"
-readonly commands=("build" "merge" "arm64" "x86_64" "rpath" "test" "update" "version" "help")
+# ========config==============
+source "$(dirname "${BASH_SOURCE[0]}")/pyenv-universal2-config"
 
 
 # ====== Logging ======
@@ -67,6 +56,25 @@ color_echo() {
     esac
 }
 
+# ====== Global Variable ======
+pyenv_universal2_config_path
+
+VERSION="1.0.0"
+RELEASE_DATE="2025-02-09"
+PYENV_UNIVERSAL2_REPO="https://github.com/ziprangga/pyenv-universal2"
+DEBUG=false
+DRY_RUN=false
+VERBOSE=false
+WITHOUT_SUFFIX=false
+NO_CLEAN=false
+SUFFIX=""
+ALIAS=""
+readonly X86_ARCH="arch -x86_64"
+readonly ARM_ARCH="arch -arm64"
+readonly PYENV_ROOT="$(pyenv root)"
+readonly BASE_COMMAND="pyenv-universal2"
+readonly commands=("build" "merge" "arm64" "x86_64" "rpath" "test" "update" "version" "custom-brew" "help")
+
 # ====== Load Core Script ======
 load_core_script() {
     local SCRIPT_NAME="$1"
@@ -91,7 +99,7 @@ parse_global_options() {
             --dry-run) DRY_RUN=true ;;
             --verbose) VERBOSE=true ;;
             --without-suffix) WITHOUT_SUFFIX=true ;;
-            --no-clean) NO_CLEAN=false ;;
+            --no-clean) NO_CLEAN=true ;;
             --suffix=*) SUFFIX="${1#*=}" ;;
             --alias=*) ALIAS="${1#*=}" ;;
             --help)
@@ -262,7 +270,7 @@ rpath_command() {
     if [[ $# -gt 0 ]]; then
         python_path="$1"
     else
-        python_path="$(pyenv root)/versions/$python_version"
+        python_path="$PYENV_ROOT/versions/$python_version"
     fi
 
     if ! declare -F universal2-rpath >/dev/null; then
@@ -286,6 +294,26 @@ version_command() {
     color_echo "WARN" "pyenv-universal2 version $VERSION"
     color_echo "INFO" "Released: $RELEASE_DATE"
     color_echo "INFO" "Author: zi"
+}
+
+custom-brew_command() {
+    local arm_brew=""
+    local x86_brew=""
+
+    for arg in "$@"; do
+        case $arg in
+            arm_brew=*) arm_brew="${arg#*=}" ;;  
+            x86_brew=*) x86_brew="${arg#*=}" ;;  
+        esac
+    done
+
+
+    if ! declare -F universal2-custom-brew >/dev/null; then
+        log "INFO" "Loading core script for custom-brew"
+        load_core_script "universal2-custom-brew"
+    fi
+
+    add_custom_brew_path "arm_brew=$arm_brew" "x86_brew=$x86_brew"
 }
 
 help_command() {
@@ -337,10 +365,8 @@ main() {
         exit 1
     fi
 
-    # Parse global options
     parse_global_options "$@"
 
-    # check and run the function
     if [[ ${#REMAINING_ARGS[@]} -lt 1 ]]; then
         color_echo "ERROR" "Error: No command specified." >&2
         color_echo "INFO" "Use '$BASE_COMMAND help' for more details."

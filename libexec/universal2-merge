@@ -6,12 +6,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/resolve-ext-dylib"
 source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/test-python-binary"
 source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/clean-up-temp"
 
-
 universal2_merge() {
     local python_version="$1"
     local custom_suffix="$2"
     local no_clean="$3"
-    local working_path="${4:-"$(pyenv root)/versions"}"
+    local working_path="${4:-"$PYENV_ROOT/versions"}"
 
     local output_dir="${working_path}/$custom_suffix"
     if [[ "$DRY_RUN" == "true" ]]; then
@@ -69,7 +68,7 @@ universal2_merge() {
         fi
     }
         
-    if [[ $no_clean == true ]]; then
+    if [[ $no_clean == false ]]; then
         color_echo "INFO" "Cleaning up temporary installations..."
         if [[ "$DRY_RUN" == "true" ]]; then
             color_echo "INFO" "Dry run mode, skipping cleanup of temporary directories."

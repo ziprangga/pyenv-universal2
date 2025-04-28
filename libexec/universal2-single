@@ -11,9 +11,9 @@ universal2_single_build() {
 
 
     if [[ $arch == "x86_64" ]]; then       
-        brew_path=${brew_path:-/usr/local/bin} 
+        brew_path="${X86_BREW_DIR}/bin" 
     elif [[ $arch == "arm64" ]]; then
-        brew_path=${brew_path:-/opt/homebrew/bin}
+        brew_path="${ARM_BREW_DIR}/bin"
     else
         color_echo "ERROR" "Need --arm64 or --x86_64 for architecture"
     fi

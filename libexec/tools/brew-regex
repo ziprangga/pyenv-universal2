@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+build_brew_regex() {
+    if [[ -z "$ARM_BREW_DIR" || -z "$X86_BREW_DIR" ]]; then
+        color_echo "ERROR" "ARM_BREW_DIR or X86_BREW_DIR not set."
+        return 1
+    fi
+    BREW_PATH_REGEX="^(${ARM_BREW_DIR}|${X86_BREW_DIR})/(opt|Cellar)"
+}

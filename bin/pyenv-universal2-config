@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+
+BREW_DUAL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+detect_homebrew_prefixes() {
+    ARM_BREW=""
+    X86_BREW=""
+    ARM_BREW_DIR=""
+    X86_BREW_DIR=""
+
+    CUSTOM_BREW_PATHS_FILE="$BREW_DUAL_ROOT/.custom_brew_paths"
+
+    if [[ -f "$CUSTOM_BREW_PATHS_FILE" ]]; then
+        while IFS='=' read -r key value; do
+            case "$key" in
+                "CUSTOM_ARM_BREW") CUSTOM_ARM_BREW="$value" ;;
+                "CUSTOM_X86_BREW") CUSTOM_X86_BREW="$value" ;;
+            esac
+        done < "$CUSTOM_BREW_PATHS_FILE"
+    fi
+
+    if [[ -x "$CUSTOM_ARM_BREW" ]]; then
+        ARM_BREW_DIR=$CUSTOM_ARM_BREW
+        ARM_BREW="$CUSTOM_ARM_BREW/bin/brew"
+        color_echo "INFO" "Using ARM Homebrew from: $ARM_BREW"
+    elif [[ -x "/opt/homebrew/bin/brew" ]]; then
+        ARM_BREW_DIR="/opt/homebrew"
+        ARM_BREW="/opt/homebrew/bin/brew"
+        color_echo "INFO" "Using default ARM Homebrew: $ARM_BREW"
+    else
+        color_echo "WARN" "ARM Homebrew not found. Fallback using homebrew default path: /opt/homebrew/bin/brew"
+        ARM_BREW="/opt/homebrew"
+        color_echo "ERROR" "Please add ARM Homebrew manually using: \"pyenv universal2 custom-brew arm_brew='path/to/arm/homebrew/folder'\""
+    fi
+
+    if [[ -x "$CUSTOM_X86_BREW" ]]; then
+        X86_BREW_DIR=$CUSTOM_X86_BREW
+        X86_BREW="$CUSTOM_X86_BREW/bin/brew"
+        color_echo "INFO" "Using X86 Homebrew from: $X86_BREW"
+    elif [[ -x "/usr/local/bin/brew" ]]; then
+        X86_BREW_DIR="/usr/local"
+        X86_BREW="/usr/local/bin/brew"
+        color_echo "INFO" "Using default X86 Homebrew: $X86_BREW"
+    else
+        color_echo "WARN" "X86 Homebrew not found. Fallback using homebrew default path: /opt/homebrew/bin/brew"
+        X86_BREW="/usr/local"
+        color_echo "ERROR" "Please add x86 Homebrew manually using: \"pyenv universal2 custom-brew x86_brew='path/to/x86/homebrew/folder'\""
+    fi
+}
+
+pyenv_universal2_config_path() {
+    detect_homebrew_prefixes
+}

@@ -23,12 +23,12 @@ build_universal2_python() {
     local python_version="$1"
     local custom_suffix="$2"
     local no_clean="$3"
-    local working_path="${4:-"$(pyenv root)/versions"}"
+    local working_path="${4:-"$PYENV_ROOT/versions"}"
 
     check_required_commands
 
-    local x86_brew_path=${x86_brew_path:-/usr/local/bin}
-    local arm_brew_path=${arm_brew_path:-/opt/homebrew/bin}
+    local x86_brew_path="${X86_BREW_DIR}/bin"
+    local arm_brew_path="${ARM_BREW_DIR}/bin"
     validate_dual_brew_setup "$arm_brew_path" "$x86_brew_path" || {
         log "INFO" "Dual Brew setup validation failed."
         exit 1
@@ -102,7 +102,7 @@ build_universal2_python() {
         fi
     }
 
-    if [[ $no_clean == true ]]; then
+    if [[ $no_clean == false ]]; then
         color_echo "INFO" "Step 5: Cleaning up temporary installations..."
         if [[ "$DRY_RUN" == "true" ]]; then
             color_echo "INFO" "Dry run mode, skipping cleanup of temporary directories."

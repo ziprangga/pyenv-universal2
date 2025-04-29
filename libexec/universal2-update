@@ -28,16 +28,6 @@ universal2_update() {
     # Fetch latest changes
     git -C "$PLUGIN_DIR" fetch origin
 
-    # Determine current branch
-    local CURRENT_BRANCH
-    CURRENT_BRANCH=$(git -C "$PLUGIN_DIR" rev-parse --abbrev-ref HEAD)
-
-    # Prevent direct updates to main or stable
-    if [[ "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "stable" ]]; then
-        log "ERROR" "Direct updates to '$CURRENT_BRANCH' are not allowed. Please switch to a different branch."
-        return 1
-    fi
-
     # Check if an update is needed
     if git -C "$PLUGIN_DIR" status -uno | grep -q "Your branch is behind"; then
         color_echo "INFO" "A new version is available! Updating pyenv-universal2..."
@@ -46,10 +36,14 @@ universal2_update() {
         return 0
     fi
 
+    # Determine current branch
+    local CURRENT_BRANCH
+    CURRENT_BRANCH=$(git -C "$PLUGIN_DIR" rev-parse --abbrev-ref HEAD)
+
     # Stash local changes if necessary
     local STASH_APPLIED=0
     if ! git -C "$PLUGIN_DIR" diff --quiet; then
-        log "WARN" "You have local changes. Stashing them before updating..."
+        color_echo "WARN" "You have local changes. Stashing them before updating..."
         git -C "$PLUGIN_DIR" stash push -m "Auto-stash before update"
         STASH_APPLIED=1
     fi
@@ -64,7 +58,7 @@ universal2_update() {
 
     # Restore stashed changes if applicable
     if [[ "$STASH_APPLIED" -eq 1 ]]; then
-        log "INFO" "Restoring your previous changes..."
-        git -C "$PLUGIN_DIR" stash pop || log "WARN" "Failed to restore stashed changes."
+        color_echo "INFO" "Restoring your previous changes..."
+        git -C "$PLUGIN_DIR" stash pop || color_echo "WARN" "Failed to restore stashed changes."
     fi
 }

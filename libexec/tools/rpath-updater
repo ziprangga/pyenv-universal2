@@ -1,59 +1,187 @@
 #!/usr/bin/env bash
 
-source "$(dirname "${BASH_SOURCE[0]}")/brew-regex"
+path_regex() {
+    if [[ -z "$ARM_BREW_DIR" || -z "$X86_BREW_DIR" ]]; then
+        color_echo "ERROR" "ARM_BREW_DIR or X86_BREW_DIR not set."
+        return 1
+    fi
+    ARM_BREW_DIR_ESCAPED=$(echo "$ARM_BREW_DIR" | sed 's/\//\\\//g')
+    X86_BREW_DIR_ESCAPED=$(echo "$X86_BREW_DIR" | sed 's/\//\\\//g')
+    BREW_PATH_REGEX="^(${ARM_BREW_DIR_ESCAPED}|${X86_BREW_DIR_ESCAPED})/(opt|Cellar)"
+}
 
-update_rpath() {
-    local python_binary="$1"
-    local target_path="$2"
+scan_dylib(){
+    local python_path="$1"
+    local temp_folder="$2"
+    find "$python_path" -type f \( -name "*.dylib" -o -name "*.so" \) -print \
+        -o -type f -exec sh -c '
+            for file; do
+                if file "$file" | grep -qE "Mach-O.*executable"; then
+                    echo "$file"
+                fi
+            done
+        ' sh {} +
+}
 
-    
-    color_echo "DEBUG" "Checking Python binary at $python_binary"
+extract_fat_binary(){
+    local python_dir="$1"
+    local temp_folder="$2"
+    local output_file="$3"
 
-    if [[ ! -f "$python_binary" ]]; then
-        log "WARN" "Error: Python binary not found at $python_binary"
-        log "INFO" "Please verify the Python version and binary path."
-        exit 1
+    : > "$output_file"
+
+    while IFS= read -r binary; do
+        [[ -f "$binary" ]] || continue
+
+        color_echo "INFO" "Processing binary: $binary"
+
+        local binary_name
+        binary_name=$(basename "$binary")
+
+        if ! lipo -info "$binary" | grep -q "fat"; then
+            log "INFO" "$binary is not a fat binary, skipping extraction."
+            continue
+        fi
+
+        local x86_binary="$temp_folder/${binary_name}_x86"
+        local arm_binary="$temp_folder/${binary_name}_arm"
+
+        # Split the fat binary
+        $DRY_RUN || lipo -extract x86_64 "$binary" -output "$x86_binary"
+        $DRY_RUN || lipo -extract arm64 "$binary" -output "$arm_binary"
+
+        echo "$binary|$x86_binary|$arm_binary" >> "$output_file"
+        
+    done < <(scan_dylib "$python_dir")
+}
+
+collect_ext_lib(){
+    local binary="$1"
+    local temp_folder="$2"
+
+    local libs
+    libs=$(otool -L "$binary" | awk 'NR>1 {print $1}' \
+    | grep -E "$BREW_PATH_REGEX" || true)
+
+    if [[ -n "$libs" ]]; then
+        color_echo "INFO" "Found binary: $binary"
+
+        while IFS= read -r lib; do
+            color_echo "INFO" "Binary $binary is linked with library: $lib"
+        done <<< "$libs"
+    else
+        color_echo "INFO" "Skipping binary (no external libraries): $binary"
     fi
 
-    libraries=$(otool -L "$python_binary" | awk 'NR>1 {print $1}' | grep -vE "^\s*(/System|/usr/lib|$BREW_PATH_REGEX)")
+    for lib in $libs; do
+        local base_name
+        base_name=$(basename "$lib")
+        local dest_path="$temp_folder/$base_name"
 
-    while read -r library; do
-        [[ -n "$library" ]] || continue
-        if [[ -f "$library" && "$library" != "$target_path"  ]]; then
-            if [[ "$library" == */lib/* ]]; then
-                local base_name=$(basename "$library")
-                $DRY_RUN || install_name_tool -change "$library" "${target_path}/lib/${base_name}" "$python_binary"
-                log "INFO" "Updated rpath: $library -> ${target_path}/lib/${base_name}"
-            fi
-            
-        else
-            log "WARN" "Warning: $library is not a valid file, skipping."
+        if [[ -f "$dest_path" ]]; then
+            log "INFO" "Skipping copy: $dest_path already exists"
+            continue
         fi
+
+        $DRY_RUN || cp "$lib" "$dest_path"
+        log "INFO" "Copied $lib to $dest_path"
+    done
+}
+
+merge_ext_lib(){
+    local arm_lib_folder="$1"
+    local x86_lib_folder="$2"
+    local target_lib_path="$3"
+
+    local merged_count=0
+    mkdir -p "$target_lib_path"
+
+    for arm_binary in "$arm_lib_folder"/*.dylib; do
+        [[ -f "$arm_binary" ]] || continue
+        local base_name
+        base_name=$(basename "$arm_binary")
+        local x86_binary="$x86_lib_folder/$base_name"
+        local merged_file="$target_lib_path/$base_name"
+
+        if [[ -f "$x86_binary" ]]; then
+            log "INFO" "Merging $arm_binary and $x86_binary into $merged_file"
+            $DRY_RUN || lipo -create "$arm_binary" "$x86_binary" -output "$merged_file"
+            ((merged_count++))
+        else
+            log "WARN" "Skipping $base_name: Missing x86_64 variant."
+        fi
+    done
+
+    if [[ $merged_count -eq 0 ]]; then
+        log "WARN" "No libraries merged. Please check input folders."
+    else
+        log "INFO" "Merged $merged_count libraries into $target_lib_path"
+    fi
+}
+
+update_rpath() {
+    local binary="$1"
+    local target_path="$2"
+
+    libraries=$(otool -L "$binary" | awk 'NR>1 {print $1}' || true)
+
+    while IFS= read -r library; do
+        [[ -n "$library" ]] || continue
+
+        local base_name
+        base_name=$(basename "$library")
+
+        if [[ "$library" == /usr/lib/* || "$library" == /System/Library/* ]]; then
+            color_echo "DEBUG" "Skipping system library: $library"
+            continue
+
+        elif [[ "$library" =~ $BREW_PATH_REGEX ]]; then
+            local new_path="${target_path}/deps/${base_name}"
+            if [[ -f "$new_path" ]]; then
+                $DRY_RUN || install_name_tool -change "$library" "$new_path" "$binary"
+                log "INFO" "Updated rpath external: $library -> $new_path"
+            else
+                log "WARN" "Warning: Target $new_path not found for brew library, skipping."
+            fi
+
+        elif [[ "$library" != "$target_path"* ]]; then
+            local new_path="${target_path}/lib/${base_name}"
+            if [[ -f "$new_path" ]]; then
+                $DRY_RUN || install_name_tool -change "$library" "$new_path" "$binary"
+                log "INFO" "Updated rpath internal: $library -> $new_path"
+            else
+                log "WARN" "Warning: Target $new_path not found for internal pyenv library, skipping."
+            fi
+
+        else
+            color_echo "DEBUG" "Already correct rpath: $library"
+        fi
+
     done <<< "$libraries"
 }
 
 update_lc_rpath() {
-    local python_binary="$1"
+    local binary="$1"
     local target_path="$2"
 
-    color_echo "DEBUG" "Checking Python binary at $python_binary"
+    color_echo "DEBUG" "Checking Python binary at $binary"
 
-    if [[ ! -f "$python_binary" ]]; then
-        log "WARN" "Error: Python binary not found at $python_binary"
+    if [[ ! -f "$binary" ]]; then
+        log "WARN" "Error: Python binary not found at $binary"
         log "INFO" "Please verify the Python version and binary path."
         exit 1
     fi
 
-    rpaths=$(otool -l "$python_binary" | awk '/cmd LC_RPATH/,/path/' | grep path | awk '{print $2}')
+    libraries=$(otool -l "$binary" | awk '/cmd LC_RPATH/,/path/' | grep path | awk '{print $2}')
 
-    log "INFO" "Existing LC_RPATH entries in $python_binary:"
-    log "INFO" "$rpaths"
+    log "INFO" "Existing LC_RPATH entries in $binary:"
+    log "INFO" "$libraries"
 
     while IFS= read -r library || [[ -n "$library" ]]; do
        
         if [[ $library == "${ARM_BREW_DIR}/lib" || $library == "${X86_BREW_DIR}/lib" ]]; then
             log "INFO" "Updating LC_RPATH: $library -> ${target_path}/deps"
-            $DRY_RUN || install_name_tool -rpath "$library" "${target_path}/deps" "$python_binary"
+            $DRY_RUN || install_name_tool -rpath "$library" "${target_path}/deps" "$binary"
             if [[ $? -eq 0 ]]; then
                 log "INFO" "Successfully updated LC_RPATH: $library -> ${target_path}/deps"
             else
@@ -63,7 +191,7 @@ update_lc_rpath() {
         elif [[ $library != "${target_path}/lib" ]]; then
             
             log "INFO" "Updating LC_RPATH: $library -> ${target_path}/lib"
-            $DRY_RUN || install_name_tool -rpath "$library" "${target_path}/lib" "$python_binary"
+            $DRY_RUN || install_name_tool -rpath "$library" "${target_path}/lib" "$binary"
             if [[ $? -eq 0 ]]; then
                 log "INFO" "Successfully updated LC_RPATH: $library -> ${target_path}/lib"
             else
@@ -73,39 +201,84 @@ update_lc_rpath() {
         else
             log "WARN" "LC_RPATH $library does not match criteria, skipping."
         fi
-    done <<< "$rpaths"
+    done <<< "$libraries"
 }
 
-update_fat_binary_rpath() {
-    local python_binary="$1"
-    local target_path="$2"
-    local temp_folder="$target_path/temp"
+collect_and_merge_ext_lib(){
+    local x86_binary="$1"
+    local arm_binary="$2"
+    local target_path="$3"
+    local temp_folder="$4"
 
-    $DRY_RUN || mkdir -p "$temp_folder"
+    # collect ext lib
+    $DRY_RUN || collect_ext_lib "$x86_binary" "$temp_folder/ext_lib_x86"
+    $DRY_RUN || collect_ext_lib "$arm_binary" "$temp_folder/ext_lib_arm"
 
-    $DRY_RUN || lipo -extract x86_64 "$python_binary" -output "$temp_folder/python_x86_64"
-    $DRY_RUN || lipo -extract arm64 "$python_binary" -output "$temp_folder/python_arm64"
-
-    $DRY_RUN || update_lc_rpath "$temp_folder/python_x86_64" "$target_path" 
-    $DRY_RUN || update_lc_rpath "$temp_folder/python_arm64" "$target_path" 
-
-    $DRY_RUN || lipo -create "$temp_folder/python_x86_64" "$temp_folder/python_arm64" -output "$python_binary"
-
-    $DRY_RUN || rm -rf "$temp_folder"
-    log "INFO" "Successfully updated RPATH for all architectures in $python_binary"
+    # merge ext lib
+    $DRY_RUN || merge_ext_lib "$temp_folder/ext_lib_arm" "$temp_folder/ext_lib_x86" "$target_path/deps"
 }
 
+update_binary_rpath_and_merge() {
+    local x86_binary="$1"
+    local arm_binary="$2"
+    local target_path="$3"
+    local binary="$4"
+
+    # Update RPATH separately
+    $DRY_RUN || update_rpath "$x86_binary" "$target_path"
+    $DRY_RUN || update_rpath "$arm_binary" "$target_path"
+
+    # Update LC_RPATH separately
+    $DRY_RUN || update_lc_rpath "$x86_binary" "$target_path"
+    $DRY_RUN || update_lc_rpath "$arm_binary" "$target_path"
+
+    # Merge back
+    $DRY_RUN || lipo -create "$x86_binary" "$arm_binary" -output "$binary"
+
+    log "INFO" "Successfully updated fat binary: $binary"
+
+    if [[ "$binary" == *.dylib ]]; then
+        local base_name
+        base_name=$(basename "$binary")
+        local new_id="@rpath/${base_name}"
+
+        log "INFO" "Updating LC_ID_DYLIB of $binary to $new_id"
+        $DRY_RUN || install_name_tool -id "$new_id" "$binary"
+        if [[ $? -eq 0 ]]; then
+            log "INFO" "Successfully updated LC_ID_DYLIB: $binary -> $new_id"
+        else
+            log "WARN" "Failed to update LC_ID_DYLIB for $binary"
+            exit 1
+        fi
+    fi
+}
 
 rpath_updater(){
     local python_version="$1"
     local python_path="$2"
 
     local target_path="$python_path"
-    local minor_version=$(echo "$python_version" | cut -d. -f1,2)
+    local minor_version
+    minor_version=$(echo "$python_version" | cut -d. -f1,2)
     local python_binary="$python_path/bin/python${minor_version}"
+    local temp_folder="$PYENV_ROOT/temp_dir"
+    local python_dir
+    python_dir=$(dirname "$(dirname "$python_binary")")
+    
 
-    build_brew_regex
+    $DRY_RUN || mkdir -p "$temp_folder"
+    $DRY_RUN || mkdir -p "$temp_folder/ext_lib_x86"
+    $DRY_RUN || mkdir -p "$temp_folder/ext_lib_arm"
+    $DRY_RUN || mkdir -p "$target_path/deps"
 
-    update_rpath "$python_binary" "$target_path" 
-    update_fat_binary_rpath "$python_binary" "$target_path"
+    path_regex
+    local extract_log="$temp_folder/extracted.txt"
+    extract_fat_binary "$python_dir" "$temp_folder" "$extract_log"
+    while IFS='|' read -r binary x86_binary arm_binary; do
+        collect_and_merge_ext_lib "$x86_binary" "$arm_binary" "$target_path" "$temp_folder"
+        update_binary_rpath_and_merge "$x86_binary" "$arm_binary" "$target_path" "$binary"
+    done < "$extract_log"
+
+    $DRY_RUN || rm -rf "$temp_folder"
+    log "INFO" "Successfully updated all fat binaries in $python_dir"
 }

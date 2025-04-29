@@ -2,7 +2,6 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/merge-python-binary"
 source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/rpath-updater" 
-source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/resolve-ext-dylib" 
 source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/test-python-binary"
 source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/clean-up-temp"
 
@@ -48,13 +47,6 @@ universal2_merge() {
             color_echo "INFO" "Dry run mode, skipping update rpath."
     else
         rpath_updater "$python_version" "$output_dir"
-    fi
-
-    log "INFO" "update_ext_dylib_path \"$python_version\" \"$output_dir\""
-    if [[ "$DRY_RUN" == "true" ]]; then
-            color_echo "INFO" "Dry run mode, skipping update ext dylib path."
-    else
-        update_ext_dylib_path "$python_version" "$output_dir"
     fi
 
     log "INFO" "test_binary_fat \"$output_dir\""

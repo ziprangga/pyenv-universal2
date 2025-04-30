@@ -28,10 +28,6 @@ build_universal2_python() {
 
     local x86_brew_path="${X86_BREW_DIR}/bin"
     local arm_brew_path="${ARM_BREW_DIR}/bin"
-    validate_dual_brew_setup "$arm_brew_path" "$x86_brew_path" || {
-        log "INFO" "Dual Brew setup validation failed."
-        exit 1
-    }
 
     local output_dir="${working_path}/${custom_suffix}"
     local x86_dir="${working_path}/${python_version}-x86"

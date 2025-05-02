@@ -59,7 +59,7 @@ color_echo() {
 # ====== Global Variable ======
 pyenv_universal2_config_path
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 RELEASE_DATE="2025-02-09"
 PYENV_UNIVERSAL2_REPO="https://github.com/ziprangga/pyenv-universal2"
 DEBUG=false

@@ -1,14 +1,56 @@
 #!/usr/bin/env bash
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-utility"
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-merge-lib-bin"
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-rpath-updater"
 
-source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/rpath-updater" 
+universal2_single_rpath(){
+    local python_dir="$1"   
+    local target_path="$2"
+    local saved_scan_log="$3"
 
+    scan_binary_and_cache "$python_dir" "$saved_scan_log"
+    while IFS='|' read -r binary; do
+        update_int_binary "$binary" "$target_path"
+    done < "$saved_scan_log"
+}
 
-universal2_rpath() {
+universal2_fat_rpath() {
+    local python_dir="$1"   
+    local temp_dir="$2"
+    local target_path="$3"
+    local saved_scan_log="$4" 
+
+    scan_and_extract_fat_binary "$python_dir" "$temp_dir" "$saved_scan_log"
+    while IFS='|' read -r binary x86_binary arm_binary; do
+        update_int_fat_binary "$x86_binary" "$arm_binary" "$target_path" "$binary"
+        merge_int_bin_lib "$x86_binary" "$arm_binary" "$binary"
+    done < "$saved_scan_log"
+
+}
+
+universal2_update_rpath(){
     local python_version="$1"
-    local python_path="$2"
-    
+    local python_dir=$PYENV_ROOT/$python_version    
+    local temp_dir="$PYENV_ROOT/temp_dir/${python_version}_temp"
+    local target_path="$python_dir"
 
-    log "INFO" "rpath_updater \"$python_version\" \"$python_path\""
-    rpath_updater "$python_version" "$python_path"
+    local minor_version
+    minor_version=$(echo "$python_version" | cut -d. -f1,2)
+    local python_binary="$python_dir/bin/python${minor_version}"
+
+    $DRY_RUN || mkdir -p "$temp_dir"
     
+    path_regex
+
+    if ! lipo -info "$python_binary" | grep -q "fat"; then
+        local saved_scan_log="$temp_dir/${python_version}_scan.txt"
+        universal2_single_rpath "$python_dir" "$target_path" "$saved_scan_log"
+    else
+        local saved_scan_log="$temp_dir/${python_version}_scan_extract.txt"
+        universal2_fat_rpath "$python_dir" "$temp_dir" "$target_path" "$saved_scan_log"
+    fi
+
+    $DRY_RUN || cleanup_temp "$temp_dir"
+    log "INFO" "Successfully updated all fat binaries in $python_dir"
+
 }

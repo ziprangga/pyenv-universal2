@@ -10,7 +10,7 @@ install_python_arch() {
     log "INFO" "Installing Python $python_version for $arch..."
 
     # Eksport PATH
-    $DRY_RUN || export PATH="$dep_path:$PATH"
+    export PATH="$dep_path:$PATH"
     log "INFO" "Updated PATH: $dep_path:$PATH"
 
 
@@ -20,7 +20,7 @@ install_python_arch() {
     [[ "$VERBOSE" == true ]] && pyenv_cmd="$pyenv_cmd --verbose"
 
     log "INFO" "Running command: $arch_cmd $pyenv_cmd $python_version"
-    $DRY_RUN || UNIVERSAL2_PYTHON_SUFFIX="$custom_suffix" $arch_cmd $pyenv_cmd "$python_version" $extra_params
+    UNIVERSAL2_PYTHON_SUFFIX="$custom_suffix" $arch_cmd $pyenv_cmd "$python_version" $extra_params
 
     local EXIT_CODE=$?
     if [[ $EXIT_CODE -ne 0 ]]; then

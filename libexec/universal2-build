@@ -1,78 +1,88 @@
 #!/usr/bin/env bash
 
 # Load 
-source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/validate-dual-brew"
-source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/install-python-arch" 
-source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/merge-python-binary"
-source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/rpath-updater" 
-source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/test-python-binary"
-source "$(dirname "${BASH_SOURCE[0]}")/../libexec/tools/clean-up-temp" 
-
-# Check for required commands
-check_required_commands() {
-    log "INFO" "Checking required commands..."
-    local required_commands=("lipo" "pyenv" "arch")
-    for cmd in "${required_commands[@]}"; do
-        command -v "$cmd" >/dev/null 2>&1 || { log "ERROR" "Error: $cmd is not installed."; exit 1; }
-    done
-}
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-utility"
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-install-python" 
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-merge-lib-bin"
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-collect-ext-lib"
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-rpath-updater" 
 
 
 build_universal2_python() {
     local python_version="$1"
     local custom_suffix="$2"
     local no_clean="$3"
-    local working_path="${4:-"$PYENV_ROOT/versions"}"
-
+    local working_path="$PYENV_ROOT/versions"
+    local temp_dir="$PYENV_ROOT/temp_dir/${custom_suffix}_temp"
+    local output_dir="${working_path}/$custom_suffix"
+    local target_path_ext="$output_dir/deps"
+    
     check_required_commands
 
     local x86_brew_path="${X86_BREW_DIR}/bin"
     local arm_brew_path="${ARM_BREW_DIR}/bin"
-
-    local output_dir="${working_path}/${custom_suffix}"
-    local x86_dir="${working_path}/${python_version}-x86"
-    local arm_dir="${working_path}/${python_version}-arm"
     local arch_x86="x86_64"
     local arch_arm="arm64"
 
     color_echo "INFO" "Step 1: Installing Python for x86_64..."
-    install_python_arch "$arch_x86" "$python_version" "$x86_brew_path" "$custom_suffix"
-    if [[ -z "$DRY_RUN" || "$DRY_RUN" == "false" ]]; then
-        mv "$output_dir" "$x86_dir"
-        log "INFO" "mv \"$output_dir\" \"$x86_dir\""
-    else
-        color_echo "INFO" "Dry run mode, skipping move of x86 directory."
-    fi
+    install_python_arch "$arch_x86" "$python_version" "$x86_brew_path" "${python_version}-x86"
    
     color_echo "INFO" "Step 2: Installing Python for ARM64..."  
-    install_python_arch "$arch_arm" "$python_version" "$arm_brew_path" "$custom_suffix"
-    if [[ -z "$DRY_RUN" || "$DRY_RUN" == "false" ]]; then
-        mv "$output_dir" "$arm_dir"
-        log "INFO" "mv \"$output_dir\" \"$arm_dir\""
-    else
-        color_echo "INFO" "Dry run mode, skipping move of arm directory."
-    fi
-    
-    color_echo "INFO" "Step 3: Merging Python...." 
-    log "INFO" "merge_binary \"$python_version\" \"$output_dir\" \"$x86_dir\" \"$arm_dir\""
-    merge_binary "$python_version" "$output_dir" "$x86_dir" "$arm_dir" || {
-        if [[ "$DRY_RUN" == "true" ]]; then
-            color_echo "INFO" "Dry run mode, skipping merge validation."
-        else
-            color_echo "ERROR" "Error: fat binary tests failed."
-            cleanup_temp "$x86_dir"
-            cleanup_temp "$output_dir"
-            cleanup_temp "$arm_dir"
-            exit 1
-        fi
-    }
-        
+    install_python_arch "$arch_arm" "$python_version" "$arm_brew_path" "${python_version}-arm"
 
-    log "INFO" "rpath_updater \"$python_version\" \"$output_dir\""
+    local x86_dir="${working_path}/${python_version}-x86"
+    local arm_dir="${working_path}/${python_version}-arm"
+
+    log "INFO" "Create environment"
+    $DRY_RUN || rsync -a "$arm_dir/" "$output_dir/"
+    local temp_ext_collected_x86="$temp_dir/ext_lib_x86"
+    local temp_ext_collected_arm="$temp_dir/ext_lib_arm"
+    $DRY_RUN || mkdir -p "$temp_dir/" "$target_path_ext" "$temp_ext_collected_x86" "$temp_ext_collected_arm"
+
+    path_regex
+
+    log "INFO" "Create Fat Binary"
     if [[ "$DRY_RUN" == "true" ]]; then
-            color_echo "INFO" "Dry run mode, skipping update rpath."
+        color_echo "INFO" "Dry run mode, skipping process."
     else
-        rpath_updater "$python_version" "$output_dir"
+        local universal_binaries
+        universal_binaries=$(scan_binaries $output_dir)   
+        for binary in $universal_binaries; do
+            local relative_path="${binary#$output_dir/}"
+            local x86_binary="$x86_dir/$relative_path"
+            local merged_binary="$output_dir/$relative_path"
+            merge_int_bin_lib "$x86_binary" "$binary" "$merged_binary"        
+        done 
+    fi
+
+    log "INFO" "Collect external dependencies"
+    if [[ "$DRY_RUN" == "true" ]]; then
+        color_echo "INFO" "Dry run mode, skipping process."
+    else
+        local saved_scan_log_output_fat="$temp_dir/${python_version}_scan_output_fat.txt" 
+        scan_and_extract_fat_binary "$output_dir" "$temp_dir" "$saved_scan_log_output_fat"
+        while IFS='|' read -r binary x86_binary arm_binary; do
+            color_echo "INFO" "collecting external binary."
+            process_collect_fat_ext_lib "$x86_binary" "$arm_binary" "$temp_ext_collected_x86" "$temp_ext_collected_arm"
+        done < "$saved_scan_log_output_fat"
+
+        color_echo "INFO" "update external binary rpath"
+        update_ext_lib "$temp_ext_collected_x86" "$output_dir"
+        update_ext_lib "$temp_ext_collected_arm" "$output_dir"
+
+        color_echo "INFO" "merging external binary rpath"
+        merge_ext_lib "$temp_ext_collected_x86" "$temp_ext_collected_arm" "$target_path_ext"
+
+        while IFS='|' read -r binary x86_binary arm_binary; do
+            color_echo "INFO" "update internal binary rpath"
+            update_int_fat_binary "$x86_binary" "$arm_binary" "$output_dir"
+
+            color_echo "INFO" "merging internal binary rpath"           
+            merge_int_bin_lib "$x86_binary" "$arm_binary" "$binary"
+        done < "$saved_scan_log_output_fat"
+
+        color_echo "INFO" "re-assign codedesign external binary"
+        resign_all_binaries "$target_path_ext"
     fi
 
     color_echo "INFO" "Step 4: Testing the fat binary..."
@@ -82,21 +92,24 @@ build_universal2_python() {
             color_echo "INFO" "Dry run mode, skipping test binary."
         else
             color_echo "ERROR" "Error: fat binary tests failed."
-            cleanup_temp "$x86_dir"
             cleanup_temp "$output_dir"
-            cleanup_temp "$arm_dir"
+            cleanup_temp "$temp_dir"
             exit 1
         fi
     }
 
-    if [[ $no_clean == false ]]; then
-        color_echo "INFO" "Step 5: Cleaning up temporary installations..."
-        if [[ "$DRY_RUN" == "true" ]]; then
+    color_echo "INFO" "Step 5: Cleaning up temporary installations..." 
+    if [[ "$DRY_RUN" == "true" ]]; then
             color_echo "INFO" "Dry run mode, skipping cleanup of temporary directories."
-        else
+    else
+        if [[ $no_clean == false ]]; then               
             cleanup_temp "$x86_dir"
             cleanup_temp "$arm_dir"
+            cleanup_temp "$temp_dir"
+        else
+            cleanup_temp "$temp_dir"
         fi
+        color_echo "INFO" "cleanup temporary file"
     fi
 
     color_echo "INFO" "Process completed"

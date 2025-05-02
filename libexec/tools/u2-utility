@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+
+path_regex() {
+    if [[ -z "$ARM_BREW_DIR" || -z "$X86_BREW_DIR" ]]; then
+        color_echo "ERROR" "ARM_BREW_DIR or X86_BREW_DIR not set."
+        return 1
+    fi
+    
+    BREW_PATH_REGEX="^(${ARM_BREW_DIR}|${X86_BREW_DIR})/(opt|Cellar)"
+}
+
+scan_binaries(){
+    local python_dir="$1"
+
+    find "$python_dir" -type f \( -name "*.dylib" -o -name "*.so" \) -print \
+        -o -type f -exec sh -c '
+            for file; do
+                if file "$file" | grep -qE "Mach-O.*executable"; then
+                    echo "$file"
+                fi
+            done
+        ' sh {} +   
+}
+
+scan_and_extract_fat_binary(){
+    local python_dir="$1"
+    local temp_dir="$2"
+    local output_file="$3"
+
+    : > "$output_file"
+
+    local output_data=""
+
+    while IFS= read -r binary; do
+        [[ -f "$binary" ]] || continue
+     
+        color_echo "INFO" "Processing binary: $binary"
+
+        local binary_name
+        binary_name=$(basename "$binary")
+
+        if ! lipo -info "$binary" | grep -q "fat"; then
+            log "INFO" "$binary is not a fat binary, skipping extraction."
+            continue
+        fi
+
+        local x86_binary="$temp_dir/${binary_name}_x86"
+        local arm_binary="$temp_dir/${binary_name}_arm"
+        if [[ ! -f "$x86_binary" || ! -f "$arm_binary" ]]; then
+            lipo -extract x86_64 "$binary" -output "$x86_binary"
+            lipo -extract arm64 "$binary" -output "$arm_binary"
+        fi
+        output_data+="$binary|$x86_binary|$arm_binary"$'\n'      
+    done < <(scan_binaries "$python_dir")
+    echo -n "$output_data" >> "$output_file"
+}
+
+scan_binary_and_cache(){
+    local python_dir="$1"
+    local output_file="$2"
+
+    : > "$output_file"
+
+    local output_data=""
+
+    while IFS= read -r binary; do
+        [[ -f "$binary" ]] || continue
+
+        color_echo "INFO" "Processing binary: $binary"
+
+        local binary_name
+        binary_name=$(basename "$binary")
+        if ! lipo -info "$binary" | grep -q "fat"; then
+            log "INFO" "$binary is not a fat binary, skipping extraction."
+            continue
+        fi
+        output_data+="$binary"          
+    done < <(scan_binaries "$python_dir")
+    echo -n "$output_data" >> "$output_file"
+}
+
+resign_all_binaries() {
+    local binary_dir="$1"
+    find "$binary_dir" -type f \( -name "*.dylib" -o -name "*.so" -o -name "python3*" \) | while read -r file; do
+        if codesign --force --sign - "$file"; then
+            log "INFO" "Re-signed $file"
+        else
+            color_echo "WARN" "Failed to sign $file"
+        fi
+    done
+}
+
+cleanup_temp() {
+    local delete_item="$1"
+
+    if [[ -z "$delete_item" || "$delete_item" == "/" ]]; then
+        color_echo "ERROR" "Refusing to delete an empty or root path: '$delete_item'"
+        return 1
+    fi
+
+    if [[ -d "$delete_item" ]]; then
+        log "INFO" "Cleaning up temporary directory: $delete_item"
+        rm -rf "$delete_item"
+        log "INFO" "Cleanup completed."
+    else
+        log "WARN" "Directory not found: $delete_item"
+    fi
+}
+
+# Check for required commands
+check_required_commands() {
+    log "INFO" "Checking required commands..."
+    local required_commands=("lipo" "pyenv" "arch")
+    for cmd in "${required_commands[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || { log "ERROR" "Error: $cmd is not installed."; exit 1; }
+    done
+}
+
+# Function to test the Python binary for a given architecture
+test_binary_for_arch() {
+    local python_path="$1"
+    local arch="$2"
+
+    if arch -$arch "${python_path}/bin/python" --version; then
+        log "INFO" "$arch binary test passed successfully."
+        return 0
+    else
+        log "WARN" "Warning: $arch binary test failed."
+        return 1
+    fi
+}
+
+# Function to test both ARM64 and x86_64 binaries
+test_binary_fat() {
+    local python_path="$1"
+
+    color_echo "DEBUG" "Testing the fat binary for Python $python_version..."
+
+    # Test both architectures and track failures
+    if [[ $DRY_RUN = true ]]; then
+        log "INFO" "Dry run mode, skipped"
+    else
+        test_binary_for_arch "$python_path" "arm64" || arm_test_failed=true
+        test_binary_for_arch "$python_path" "x86_64" || x86_test_failed=true
+    fi
+
+    # Evaluate the results
+    if [[ -z "$arm_test_failed" && -z "$x86_test_failed" ]]; then
+        log "INFO" "fat binary tests passed successfully."
+        return 0
+    else
+        log "ERROR" "Error: One or both architecture tests failed."
+        return 1
+    fi
+}
+
+# Function to test Python binaries with conditional logic
+test_binary_conditional() {
+    local python_path="$1"
+
+    # Initialize failure flags for both architectures
+    local arm_test_failed
+    local x86_test_failed
+
+    # Test ARM64 and x86_64 architectures
+    if [[ $DRY_RUN = true ]]; then
+        log "INFO" "Dry run mode, skipped"
+    else
+        test_binary_for_arch "$python_path" "arm64" || arm_test_failed=true
+        test_binary_for_arch "$python_path" "x86_64" || x86_test_failed=true
+        # Determine if both tests passed
+        if [[ -z "$arm_test_failed" && -z "$x86_test_failed" ]]; then
+            log "INFO" "Success: Both ARM64 and x86_64 binary tests passed."
+        elif [[ -z "$arm_test_failed" || -z "$x86_test_failed" ]]; then
+            log "INFO" "Success: At least one binary test passed."
+        else
+            log "WARN" "Error: Both ARM64 and x86_64 binary tests failed."
+            return 1
+        fi
+    fi
+    return 0
+}

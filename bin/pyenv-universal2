@@ -69,8 +69,8 @@ WITHOUT_SUFFIX=false
 NO_CLEAN=false
 SUFFIX=""
 ALIAS=""
-readonly X86_ARCH="arch -x86_64"
-readonly ARM_ARCH="arch -arm64"
+readonly X86_ARCH="x86_64"
+readonly ARM_ARCH="arm64"
 readonly PYENV_ROOT="$(pyenv root)"
 readonly BASE_COMMAND="pyenv-universal2"
 readonly commands=("build" "merge" "arm64" "x86_64" "rpath" "test" "update" "version" "custom-brew" "help")
@@ -178,9 +178,9 @@ single_command() {
         color_echo "INFO" "install python with alias"
         local custom_suffix="$ALIAS"
     elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then
-        if [[ $arch == "x86_64" ]]; then
+        if [[ $arch == "$X86_ARCH" ]]; then
             local custom_suffix="${python_version}-x86"
-        elif [[ $arch == "arm64" ]]; then
+        elif [[ $arch == "$ARM_ARCH" ]]; then
             local custom_suffix="${python_version}-arm"
         else
             color_echo "ERROR" "Unsupported architecture: $arch"
@@ -202,11 +202,11 @@ single_command() {
 }
 
 arm64_command() {
-    single_command "arm64" "$@"
+    single_command "$ARM_ARCH" "$@"
 }
 
 x86_64_command() {
-    single_command "x86_64" "$@"
+    single_command "$X86_ARCH" "$@"
 }
 
 merge_command() {

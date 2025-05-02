@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+collect_ext_lib(){
+    local binary="$1"
+    local collected_dir="$2"
+    local seen_file="$collected_dir/.seen_libs"
+
+    mkdir -p "$collected_dir"
+
+    touch "$seen_file"
+
+    local libs
+    libs=$(otool -L "$binary" | awk 'NR>1 {print $1}' | grep -E "$BREW_PATH_REGEX" || true)
+
+    if [[ -n "$libs" ]]; then
+        color_echo "INFO" "Found binary: $binary"
+
+        while IFS= read -r lib; do
+            color_echo "INFO" "Binary $binary is linked with library: $lib"
+        done <<< "$libs"
+    else
+        color_echo "INFO" "Skipping binary (no external libraries): $binary"
+    fi
+
+    for lib in $libs; do
+        local real_lib
+        real_lib=$(readlink -f "$lib" 2>/dev/null || realpath "$lib")
+        [[ -z "$real_lib" ]] && real_lib="$lib"
+
+        # Avoid re-processing
+        if grep -Fxq "$real_lib" "$seen_file"; then
+            log "DEBUG" "Already processed: $real_lib"
+            continue
+        fi
+        echo "$real_lib" >> "$seen_file"
+
+        # Avoid collecting libraries already inside the collected_dir
+        if [[ "$real_lib" == "$collected_dir/"* ]]; then
+            log "DEBUG" "Skipping recursive collect on internal lib: $real_lib"
+            continue
+        fi
+
+        local base_name
+        base_name=$(basename "$real_lib")
+        local dest_path="$collected_dir/$base_name"
+
+        if [[ ! -f "$dest_path" ]]; then
+            cp "$real_lib" "$dest_path"
+            log "INFO" "Copied $real_lib to $dest_path"
+            collect_ext_lib "$real_lib" "$collected_dir"
+        else
+            log "DEBUG" "Already copied: $base_name"
+        fi
+
+        if [[ -L "$lib" ]]; then
+            local link_name
+            link_name=$(basename "$lib")
+            if [[ "$link_name" != "$base_name" ]]; then
+                ln -sf "$base_name" "$collected_dir/$link_name"
+                log "INFO" "Created symlink: $link_name -> $base_name"
+            fi
+        fi
+
+    done
+}
+
+process_collect_single_ext_lib(){
+    local binary="$1"
+    local target_dir="$2"
+
+    # collect ext lib
+    collect_ext_lib "$binary" "$target_dir"
+}
+
+process_collect_fat_ext_lib(){
+    local x86_binary="$1"
+    local arm_binary="$2"
+    local temp_dir_x86="$3"
+    local temp_dir_arm="$4"
+
+    # collect ext lib
+    collect_ext_lib "$x86_binary" "$temp_dir_x86"
+    collect_ext_lib "$arm_binary" "$temp_dir_arm"
+}
+

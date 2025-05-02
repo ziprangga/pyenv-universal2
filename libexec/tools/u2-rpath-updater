@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+
+update_lc_load_dylib() {
+    local binary="$1"
+    local target_path="$2"
+
+    color_echo "DEBUG" "Update rpath for $binary"
+
+    local libraries
+    libraries=$(otool -L "$binary" | awk 'NR>1 {print $1}' || true)
+
+    while IFS= read -r library; do
+        [[ -n "$library" ]] || continue
+
+        local base_name
+        base_name=$(basename "$library")
+
+        if [[ "$library" == /usr/lib/* || "$library" == /System/Library/* ]]; then
+            color_echo "DEBUG" "Skipping system library: $library"
+            continue
+
+        elif [[ "$library" =~ $BREW_PATH_REGEX ]]; then
+            local new_path="${target_path}/deps/${base_name}"
+            if [[ -f "$new_path" ]]; then
+                install_name_tool -change "$library" "$new_path" "$binary"
+                log "INFO" "Updated lc_load_dylib: $library -> $new_path"
+            else
+                log "WARN" "Warning: Target $new_path not found for brew library, skipping."
+            fi
+
+        elif [[ "$library" != "$target_path/lib"* ]]; then
+            local new_path="${target_path}/lib/${base_name}"
+            if [[ -f "$new_path" ]]; then
+                install_name_tool -change "$library" "$new_path" "$binary"
+                log "INFO" "Updated rpath internal: $library -> $new_path"
+            else
+                log "WARN" "Warning: Target $new_path not found for internal library, skipping."
+            fi
+
+        else
+            color_echo "DEBUG" "Already correct rpath: $library"
+        fi
+
+    done <<< "$libraries"
+}
+
+update_lc_rpath() {
+    local binary="$1"
+    local target_path="$2"
+
+    color_echo "DEBUG" "Checking Python binary at $binary"
+
+    if [[ ! -f "$binary" ]]; then
+        log "WARN" "Error: Python binary not found at $binary"
+        log "INFO" "Please verify the Python version and binary path."
+        return 1
+    fi
+
+    local libraries
+    libraries=$(otool -l "$binary" | awk '/cmd LC_RPATH/,/path/' | grep path | awk '{print $2}')
+
+    log "INFO" "Existing LC_RPATH entries in $binary:"
+    log "INFO" "$libraries"
+
+    while IFS= read -r library; do
+        [[ -n "$library" ]] || continue
+
+        if [[ "$library" == /usr/lib/* || "$library" == /System/Library/* ]]; then
+            color_echo "DEBUG" "Skipping system library: $library"
+            continue
+
+        elif [[ "$library" =~ $BREW_PATH_REGEX ]]; then
+            local new_path="${target_path}/deps"
+            if [[ -d "$new_path" ]]; then
+                install_name_tool -rpath "$library" "$new_path" "$binary"
+                log "INFO" "Successfully updated LC_RPATH: $library -> $new_path"
+            else
+                log "WARN" "Error: Failed to update LC_RPATH for $library."
+            fi
+        elif [[ "$library" != "$target_path/lib"* ]]; then
+            local new_path="${target_path}/lib"
+            if [[ -d "$new_path" ]]; then
+                install_name_tool -rpath "$library" "$new_path" "$binary"
+                log "INFO" "Successfully updated LC_RPATH: $library -> $new_path"
+            else
+                log "WARN" "Error: Failed to update LC_RPATH for $library."
+            fi
+        else
+            log "WARN" "LC_RPATH $library does not match criteria, skipping."
+        fi
+    done <<< "$libraries"
+}
+
+update_lc_id_dylib() {
+    local lib="$1"
+
+    local base_name
+    base_name=$(basename "$lib")
+    local new_id="@rpath/$base_name"
+
+    log "INFO" "Setting LC_ID_DYLIB for $lib to $new_id"
+    install_name_tool -id "$new_id" "$lib"
+}
+
+update_ext_lib() {
+    local lib_folder="$1"
+    local target_path="$2"
+
+    shopt -s nullglob
+    for lib in "$lib_folder"/*.dylib; do
+        [[ -f "$lib" ]] || continue
+
+        if ! file "$lib" | grep -qE "Mach-O.*dynamically linked shared library"; then
+            log "WARN" "Skipping non-dylib file: $lib"
+            continue
+        fi
+
+         # Update LC_RPATH for the collected lib
+        update_lc_load_dylib "$lib" "$target_path"
+
+        # Update the RPATH for the collected lib
+        update_lc_rpath "$lib" "$target_path"
+
+        # Set LC_ID_DYLIB for the collected lib
+        update_lc_id_dylib "$lib"
+    done
+    shopt -s nullglob
+}
+
+update_int_binary(){   
+    local binary="$1"
+    local target_path="$2"
+
+    # Update LC_RPATH separately
+    update_lc_load_dylib "$binary" "$target_path"
+
+    # Update RPATH separately
+    update_lc_rpath "$binary" "$target_path"
+
+    # update LC_ID_DYLIB
+    update_lc_id_dylib "$binary"
+}
+
+update_int_fat_binary() {
+    local x86_binary="$1"
+    local arm_binary="$2"
+    local target_path="$3"
+
+    # Update LC_RPATH separately
+    update_lc_load_dylib "$x86_binary" "$target_path"
+    update_lc_load_dylib "$arm_binary" "$target_path"
+
+    # Update RPATH separately
+    update_lc_rpath "$x86_binary" "$target_path"
+    update_lc_rpath "$arm_binary" "$target_path"
+
+    # update LC_ID_DYLIB
+    update_lc_id_dylib "$x86_binary"
+    update_lc_id_dylib "$arm_binary"
+}

@@ -3,7 +3,15 @@
 source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-utility"
 source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-merge-lib-bin"
 source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-rpath-updater" 
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-collect-ext-lib" 
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-collect-ext-lib"
+
+run_if_not_dry() {
+    if [[ "$DRY_RUN" != "true" ]]; then
+        "$@"
+    else
+        color_echo "INFO" "Dry run mode: skipped: $*"
+    fi
+}
 
 universal2_merge() {
     local python_version="$1"
@@ -12,15 +20,17 @@ universal2_merge() {
     local working_path="$PYENV_ROOT/versions"
     local temp_dir="$PYENV_ROOT/temp_dir/${custom_suffix}_temp"
     local output_dir="${working_path}/$custom_suffix"
+    local target_path_int="$output_dir/lib"
     local target_path_ext="$output_dir/deps"
     
+    local x86_dir arm_dir
     if [[ "$DRY_RUN" == "true" ]]; then
-         color_echo "INFO" "Dry run mode: Skipping directory existence check."
-        local x86_dir="${working_path}/${python_version}-x86"
-        local arm_dir="${working_path}/${python_version}-arm"
+        color_echo "INFO" "Dry run mode: Skipping directory existence check."
+        x86_dir="${working_path}/${python_version}-x86"
+        arm_dir="${working_path}/${python_version}-arm"
     else
-        local x86_dir=$(find "$working_path" -type d -name "${python_version}-x86" 2>/dev/null)
-        local arm_dir=$(find "$working_path" -type d -name "${python_version}-arm" 2>/dev/null)
+        x86_dir=$(find "$working_path" -type d -name "${python_version}-x86" 2>/dev/null)
+        arm_dir=$(find "$working_path" -type d -name "${python_version}-arm" 2>/dev/null)
     fi
 
     if [[ -n "$arm_dir" && -n "$x86_dir" ]]; then
@@ -34,10 +44,10 @@ universal2_merge() {
     fi
 
     log "INFO" "Create environment"
-    $DRY_RUN || rsync -a "$arm_dir/" "$output_dir/"
+    run_if_not_dry rsync -a "$arm_dir/" "$output_dir/"
     local temp_ext_collected_x86="$temp_dir/ext_lib_x86"
     local temp_ext_collected_arm="$temp_dir/ext_lib_arm"
-    $DRY_RUN || mkdir -p "$temp_dir/" "$target_path_ext" "$temp_ext_collected_x86" "$temp_ext_collected_arm"
+    run_if_not_dry mkdir -p "$temp_dir/" "$target_path_ext" "$temp_ext_collected_x86" "$temp_ext_collected_arm"
 
     path_regex
 
@@ -67,18 +77,22 @@ universal2_merge() {
         done < "$saved_scan_log_output_fat"
 
         color_echo "INFO" "update external binary rpath"
-        update_ext_lib "$temp_ext_collected_x86" "$output_dir"
-        update_ext_lib "$temp_ext_collected_arm" "$output_dir"
+        update_ext_lib "$temp_ext_collected_x86" "$target_path_ext"
+        update_ext_lib "$temp_ext_collected_arm" "$target_path_ext"
 
         color_echo "INFO" "merging external binary rpath"
         merge_ext_lib "$temp_ext_collected_x86" "$temp_ext_collected_arm" "$target_path_ext"
 
+        update_id_ext_binary "$target_path_ext" "@rpath/deps"
+
         while IFS='|' read -r binary x86_binary arm_binary; do
             color_echo "INFO" "update internal binary rpath"
-            update_int_fat_binary "$x86_binary" "$arm_binary" "$output_dir"
+            update_int_fat_binary "$x86_binary" "$arm_binary" "$target_path_int" "$target_path_ext"
 
             color_echo "INFO" "merging internal binary rpath"           
             merge_int_bin_lib "$x86_binary" "$arm_binary" "$binary"
+
+            update_id_int_binary "$binary" "@rpath/lib"
         done < "$saved_scan_log_output_fat"
 
         color_echo "INFO" "re-assign codedesign external binary"

@@ -5,49 +5,72 @@ source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-rpath-updater"
 
 universal2_single_rpath(){
     local python_dir="$1"   
-    local target_path="$2"
-    local saved_scan_log="$3"
+    local target_int_path="$2"
+    local target_ext_path="$3"
+    local target_id_path="$4"
+    local saved_scan_log="$5"
 
     scan_binary_and_cache "$python_dir" "$saved_scan_log"
-    while IFS='|' read -r binary; do
-        update_int_binary "$binary" "$target_path"
+    while IFS= read -r binary; do
+        update_int_binary "$binary" "$target_int_path" "$target_ext_path"
+        update_id_int_binary "$binary" "$target_id_path"
     done < "$saved_scan_log"
 }
 
 universal2_fat_rpath() {
     local python_dir="$1"   
     local temp_dir="$2"
-    local target_path="$3"
-    local saved_scan_log="$4" 
+    local target_int_path="$3"
+    local target_ext_path="$4"
+    local target_id_path="$5"
+    local saved_scan_log="$6"
 
     scan_and_extract_fat_binary "$python_dir" "$temp_dir" "$saved_scan_log"
     while IFS='|' read -r binary x86_binary arm_binary; do
-        update_int_fat_binary "$x86_binary" "$arm_binary" "$target_path" "$binary"
+        local binary_dir=$(dirname "$binary")
+        update_int_fat_binary "$x86_binary" "$arm_binary" "$target_int_path" "$target_ext_path"
         merge_int_bin_lib "$x86_binary" "$arm_binary" "$binary"
+        update_id_int_binary "$binary" "$target_id_path"
     done < "$saved_scan_log"
 
 }
 
 universal2_update_rpath(){
     local python_version="$1"
-    local python_dir=$PYENV_ROOT/$python_version    
+    local python_dir="$2"   
     local temp_dir="$PYENV_ROOT/temp_dir/${python_version}_temp"
-    local target_path="$python_dir"
 
     local minor_version
-    minor_version=$(echo "$python_version" | cut -d. -f1,2)
+    minor_version="${python_version%.*}"
     local python_binary="$python_dir/bin/python${minor_version}"
+
+    local has_dep_collected
+    has_dep_collected=$(find "$working_path" -type d -name "$python_dir/deps" 2>/dev/null)
+    if [[ -n $has_dep_collected ]]; then
+        local target_int_path="$python_dir/lib"
+        local target_ext_path="$python_dir/deps"
+    else
+        local target_int_path="$python_dir/lib"
+        local target_ext_path="$python_dir/lib"
+    fi
+
+    local target_id_path="@rpath/lib"
 
     $DRY_RUN || mkdir -p "$temp_dir"
     
     path_regex
 
-    if ! lipo -info "$python_binary" | grep -q "fat"; then
+    if [[ ! -f "$python_binary" ]]; then
+        log "ERROR" "Python binary not found at $python_binary"
+        return 1
+    fi
+
+    if lipo -info "$python_binary" | grep -q "Non-fat"; then
         local saved_scan_log="$temp_dir/${python_version}_scan.txt"
-        universal2_single_rpath "$python_dir" "$target_path" "$saved_scan_log"
+        universal2_single_rpath "$python_dir" "$target_int_path" "$target_ext_path" "$target_id_path" "$saved_scan_log"
     else
         local saved_scan_log="$temp_dir/${python_version}_scan_extract.txt"
-        universal2_fat_rpath "$python_dir" "$temp_dir" "$target_path" "$saved_scan_log"
+        universal2_fat_rpath "$python_dir" "$temp_dir" "$target_int_path" "$target_ext_path" "$target_id_path" "$saved_scan_log"
     fi
 
     $DRY_RUN || cleanup_temp "$temp_dir"

@@ -4,6 +4,15 @@ source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-utility"
 
 universal2_test() {
     local python_version="$1"
-    test_binary_conditional "$python_version"
-    
+    local python_dir="$PYENV_ROOT/versions"
+
+    local python_path
+    python_path=$(find "$python_dir" -type d -name "$python_version" 2>/dev/null)
+
+    if [[ -z "$python_path" ]]; then
+        color_echo "ERROR" "python directory not found: $python_version"
+        exit 1
+    fi
+
+    $DRY_RUN || test_binary_conditional "$python_path"
 }

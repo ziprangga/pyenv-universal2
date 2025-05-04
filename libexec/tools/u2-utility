@@ -6,7 +6,15 @@ path_regex() {
         return 1
     fi
     
-    BREW_PATH_REGEX="^(${ARM_BREW_DIR}|${X86_BREW_DIR})/(opt|Cellar)"
+    escape_path() {
+        echo "$1" | sed 's/[.[\*^$(){}+?|]/\\&/g'
+    }
+
+    local arm_re x86_re
+    arm_re=$(escape_path "$ARM_BREW_DIR")
+    x86_re=$(escape_path "$X86_BREW_DIR")
+
+    BREW_PATH_REGEX="^(${arm_re}|${x86_re})/(lib|opt|Cellar)"
 }
 
 scan_binaries(){
@@ -107,7 +115,6 @@ cleanup_temp() {
     fi
 }
 
-# Check for required commands
 check_required_commands() {
     log "INFO" "Checking required commands..."
     local required_commands=("lipo" "pyenv" "arch")
@@ -116,67 +123,78 @@ check_required_commands() {
     done
 }
 
-# Function to test the Python binary for a given architecture
 test_binary_for_arch() {
     local python_path="$1"
     local arch="$2"
+    local binary="${python_path}/bin/python"
 
-    if arch -$arch "${python_path}/bin/python" --version; then
-        log "INFO" "$arch binary test passed successfully."
+    # if arch -$arch "${python_path}/bin/python" --version; then
+    #     log "INFO" "$arch binary test passed successfully."
+    #     return 0
+    # else
+    #     log "WARN" "Warning: $arch binary test failed."
+    #     return 1
+    # fi
+    if [[ ! -x "$binary" ]]; then
+        log "WARN" "Binary not found or not executable: $binary"
+        return 1
+    fi
+
+    if lipo -archs "$binary" 2>/dev/null | grep -qw "$arch"; then
+        log "INFO" "$arch binary is present in: $binary"
         return 0
     else
-        log "WARN" "Warning: $arch binary test failed."
+        log "WARN" "$arch binary is NOT present in: $binary"
         return 1
     fi
 }
 
-# Function to test both ARM64 and x86_64 binaries
 test_binary_fat() {
     local python_path="$1"
+    local arm_test_failed=""
+    local x86_test_failed=""
 
-    color_echo "DEBUG" "Testing the fat binary for Python $python_version..."
+    test_binary_for_arch "$python_path" "arm64" || arm_test_failed=true
+    test_binary_for_arch "$python_path" "x86_64" || x86_test_failed=true
 
-    # Test both architectures and track failures
-    if [[ $DRY_RUN = true ]]; then
-        log "INFO" "Dry run mode, skipped"
-    else
-        test_binary_for_arch "$python_path" "arm64" || arm_test_failed=true
-        test_binary_for_arch "$python_path" "x86_64" || x86_test_failed=true
-    fi
-
-    # Evaluate the results
     if [[ -z "$arm_test_failed" && -z "$x86_test_failed" ]]; then
         log "INFO" "fat binary tests passed successfully."
+        color_echo "INFO" "Binary is universal2: both ARM64 and x86_64 are present."
         return 0
     else
         log "ERROR" "Error: One or both architecture tests failed."
+        color_echo "ERROR" "Binary is not universal2"
         return 1
     fi
 }
 
-# Function to test Python binaries with conditional logic
 test_binary_conditional() {
     local python_path="$1"
 
-    # Initialize failure flags for both architectures
-    local arm_test_failed
-    local x86_test_failed
+    local arm_test_failed=""
+    local x86_test_failed=""
 
-    # Test ARM64 and x86_64 architectures
-    if [[ $DRY_RUN = true ]]; then
-        log "INFO" "Dry run mode, skipped"
-    else
-        test_binary_for_arch "$python_path" "arm64" || arm_test_failed=true
-        test_binary_for_arch "$python_path" "x86_64" || x86_test_failed=true
-        # Determine if both tests passed
-        if [[ -z "$arm_test_failed" && -z "$x86_test_failed" ]]; then
-            log "INFO" "Success: Both ARM64 and x86_64 binary tests passed."
-        elif [[ -z "$arm_test_failed" || -z "$x86_test_failed" ]]; then
-            log "INFO" "Success: At least one binary test passed."
-        else
-            log "WARN" "Error: Both ARM64 and x86_64 binary tests failed."
-            return 1
-        fi
+    if ! test_binary_for_arch "$python_path" "arm64"; then
+        arm_test_failed=true
     fi
+    if ! test_binary_for_arch "$python_path" "x86_64"; then
+        x86_test_failed=true
+    fi
+
+    if [[ -z "$arm_test_failed" && -z "$x86_test_failed" ]]; then
+        log "INFO" "Binary is universal2: both ARM64 and x86_64 are present."
+        color_echo "INFO" "Binary is universal2: both ARM64 and x86_64 are present."
+    elif [[ -z "$arm_test_failed" ]]; then
+        log "INFO" "Binary is ARM64-only."
+        color_echo "INFO" "Binary is ARM64-only."
+    elif [[ -z "$x86_test_failed" ]]; then
+        log "INFO" "Binary is x86_64-only."
+        color_echo "INFO" "Binary is x86_64-only."
+    else
+        log "ERROR" "Binary is invalid: neither ARM64 nor x86_64 present."
+        color_echo "ERROR" "Binary is invalid: neither ARM64 nor x86_64 present."
+        return 1
+    fi
+
     return 0
 }

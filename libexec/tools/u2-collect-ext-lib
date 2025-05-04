@@ -12,6 +12,9 @@ collect_ext_lib(){
     local libs
     libs=$(otool -L "$binary" | awk 'NR>1 {print $1}' | grep -E "$BREW_PATH_REGEX" || true)
 
+    color_echo "DEBUG" "BREW_PATH_REGEX = $BREW_PATH_REGEX"
+    otool -L "$binary"
+
     if [[ -n "$libs" ]]; then
         color_echo "INFO" "Found binary: $binary"
 
@@ -27,14 +30,12 @@ collect_ext_lib(){
         real_lib=$(readlink -f "$lib" 2>/dev/null || realpath "$lib")
         [[ -z "$real_lib" ]] && real_lib="$lib"
 
-        # Avoid re-processing
         if grep -Fxq "$real_lib" "$seen_file"; then
             log "DEBUG" "Already processed: $real_lib"
             continue
         fi
         echo "$real_lib" >> "$seen_file"
 
-        # Avoid collecting libraries already inside the collected_dir
         if [[ "$real_lib" == "$collected_dir/"* ]]; then
             log "DEBUG" "Skipping recursive collect on internal lib: $real_lib"
             continue
@@ -68,7 +69,6 @@ process_collect_single_ext_lib(){
     local binary="$1"
     local target_dir="$2"
 
-    # collect ext lib
     collect_ext_lib "$binary" "$target_dir"
 }
 
@@ -78,7 +78,6 @@ process_collect_fat_ext_lib(){
     local temp_dir_x86="$3"
     local temp_dir_arm="$4"
 
-    # collect ext lib
     collect_ext_lib "$x86_binary" "$temp_dir_x86"
     collect_ext_lib "$arm_binary" "$temp_dir_arm"
 }

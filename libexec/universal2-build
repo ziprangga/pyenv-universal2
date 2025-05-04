@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 
 # Load 
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-utility"
 source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-install-python" 
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-utility"
 source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-merge-lib-bin"
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-collect-ext-lib"
 source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-rpath-updater" 
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-collect-ext-lib"
 
+run_if_not_dry() {
+    if [[ "$DRY_RUN" != "true" ]]; then
+        "$@"
+    else
+        color_echo "INFO" "Dry run mode: skipped: $*"
+    fi
+}
 
 build_universal2_python() {
     local python_version="$1"
@@ -15,29 +22,47 @@ build_universal2_python() {
     local working_path="$PYENV_ROOT/versions"
     local temp_dir="$PYENV_ROOT/temp_dir/${custom_suffix}_temp"
     local output_dir="${working_path}/$custom_suffix"
+    local target_path_int="$output_dir/lib"
     local target_path_ext="$output_dir/deps"
     
     check_required_commands
 
     local x86_brew_path="${X86_BREW_DIR}/bin"
     local arm_brew_path="${ARM_BREW_DIR}/bin"
-    local arch_x86="x86_64"
-    local arch_arm="arm64"
+    local arch_x86="$X86_ARCH"
+    local arch_arm="$ARM_ARCH"
 
     color_echo "INFO" "Step 1: Installing Python for x86_64..."
-    install_python_arch "$arch_x86" "$python_version" "$x86_brew_path" "${python_version}-x86"
+    install_python_arch "$arch_x86" "$python_version" "$x86_brew_path" "${python_version}-x86" || {
+        color_echo "ERROR" "Python x86_64 installation failed."
+        exit 1
+    }
    
     color_echo "INFO" "Step 2: Installing Python for ARM64..."  
-    install_python_arch "$arch_arm" "$python_version" "$arm_brew_path" "${python_version}-arm"
+    install_python_arch "$arch_arm" "$python_version" "$arm_brew_path" "${python_version}-arm" || {
+        color_echo "ERROR" "Python arm64 installation failed."
+        exit 1
+    }
+
+    for i in {1..30}; do
+        [[ -d "${working_path}/${python_version}-x86" && -d "${working_path}/${python_version}-arm" ]] && break
+        sleep 1
+    done
+
+    if [[ ! -d "${working_path}/${python_version}-x86" || ! -d "${working_path}/${python_version}-arm" ]]; then
+        color_echo "ERROR" "Python installation directories not found after timeout."
+        exit 1
+    fi
 
     local x86_dir="${working_path}/${python_version}-x86"
     local arm_dir="${working_path}/${python_version}-arm"
 
+    color_echo "INFO" "Step 3: Merging binary and collect dependencies..."
     log "INFO" "Create environment"
-    $DRY_RUN || rsync -a "$arm_dir/" "$output_dir/"
+    run_if_not_dry rsync -a "$arm_dir/" "$output_dir/"
     local temp_ext_collected_x86="$temp_dir/ext_lib_x86"
     local temp_ext_collected_arm="$temp_dir/ext_lib_arm"
-    $DRY_RUN || mkdir -p "$temp_dir/" "$target_path_ext" "$temp_ext_collected_x86" "$temp_ext_collected_arm"
+    run_if_not_dry mkdir -p "$temp_dir/" "$target_path_ext" "$temp_ext_collected_x86" "$temp_ext_collected_arm"
 
     path_regex
 
@@ -54,7 +79,7 @@ build_universal2_python() {
             merge_int_bin_lib "$x86_binary" "$binary" "$merged_binary"        
         done 
     fi
-
+    
     log "INFO" "Collect external dependencies"
     if [[ "$DRY_RUN" == "true" ]]; then
         color_echo "INFO" "Dry run mode, skipping process."
@@ -67,18 +92,22 @@ build_universal2_python() {
         done < "$saved_scan_log_output_fat"
 
         color_echo "INFO" "update external binary rpath"
-        update_ext_lib "$temp_ext_collected_x86" "$output_dir"
-        update_ext_lib "$temp_ext_collected_arm" "$output_dir"
+        update_ext_lib "$temp_ext_collected_x86" "$target_path_ext"
+        update_ext_lib "$temp_ext_collected_arm" "$target_path_ext"
 
         color_echo "INFO" "merging external binary rpath"
         merge_ext_lib "$temp_ext_collected_x86" "$temp_ext_collected_arm" "$target_path_ext"
 
+        update_id_ext_binary "$target_path_ext" "@rpath/deps"
+
         while IFS='|' read -r binary x86_binary arm_binary; do
             color_echo "INFO" "update internal binary rpath"
-            update_int_fat_binary "$x86_binary" "$arm_binary" "$output_dir"
+            update_int_fat_binary "$x86_binary" "$arm_binary" "$target_path_int" "$target_path_ext"
 
             color_echo "INFO" "merging internal binary rpath"           
             merge_int_bin_lib "$x86_binary" "$arm_binary" "$binary"
+
+            update_id_int_binary "$binary" "@rpath/lib"
         done < "$saved_scan_log_output_fat"
 
         color_echo "INFO" "re-assign codedesign external binary"

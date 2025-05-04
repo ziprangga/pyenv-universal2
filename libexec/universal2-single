@@ -6,7 +6,8 @@ universal2_single_build() {
     local arch="$1"
     local python_version="$2"
     local custom_suffix="$3"
-    local extra_params="$4"
+    shift 3
+    local extra_params=("$@")
 
 
     if [[ $arch == "$X86_ARCH" ]]; then       
@@ -15,11 +16,12 @@ universal2_single_build() {
         brew_path="${ARM_BREW_DIR}/bin"
     else
         color_echo "ERROR" "Need --arm64 or --x86_64 for architecture"
+        exit 1
     fi
 
     color_echo "INFO" "installing python $python_version $arch"
     
-    if ! install_python_arch "$arch" "$python_version" "$brew_path" "$custom_suffix" "$extra_params" ; then
+    if ! install_python_arch "$arch" "$python_version" "$brew_path" "$custom_suffix" "${extra_params[@]}" ; then
     color_echo "ERROR" "Error: Failed to install Python $python_version for $arch."
     exit 1
     fi

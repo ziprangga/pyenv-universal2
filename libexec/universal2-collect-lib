@@ -6,22 +6,25 @@ source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-collect-ext-lib"
 
 collect_external_binary(){
     local python_dir="$1"    
-    local target_path="$2"
-    local saved_scan_log="$3"
+    local target_ext_path="$2"
+    local target_id_path="$3"
+    local saved_scan_log="$4"
 
     scan_binary_and_cache "$python_dir" "$saved_scan_log"
-    while IFS='|' read -r binary; do
-        process_collect_single_ext_lib "$binary" "$target_path"
+    while IFS= read -r binary; do
+        process_collect_single_ext_lib "$binary" "$target_ext_path"
     done < "$saved_scan_log"
-    update_ext_lib "$target_path" "$target_path"
-    resign_all_binaries "$target_path"
+    update_ext_lib "$target_ext_path" "$target_ext_path"
+    update_id_ext_binary "$target_ext_path" "$target_id_path"
+    resign_all_binaries "$target_ext_path"
 }
 
 collect_ext_binary_and_merge(){
     local python_dir="$1"    
     local temp_dir="$2"
-    local target_path="$3"
-    local saved_scan_log="$4"
+    local target_ext_path="$3"
+    local target_id_path="$4"
+    local saved_scan_log="$5"
 
     local temp_dir_collected_x86="$temp_dir/ext_lib_x86"
     local temp_dir_collected_arm="$temp_dir/ext_lib_arm"
@@ -29,36 +32,40 @@ collect_ext_binary_and_merge(){
     while IFS='|' read -r binary x86_binary arm_binary; do
         process_collect_fat_ext_lib "$x86_binary" "$arm_binary" "$temp_dir_collected_x86" "$temp_dir_collected_arm"
     done < "$saved_scan_log"
-    update_ext_lib "$temp_dir_collected_x86" "$target_path"
-    update_ext_lib "$temp_dir_collected_arm" "$target_path"
-    merge_ext_lib "$temp_dir_collected_x86" "$temp_dir_collected_arm" "$target_path"
+    update_ext_lib "$temp_dir_collected_x86" "$target_ext_path"
+    update_ext_lib "$temp_dir_collected_arm" "$target_ext_path"
+    merge_ext_lib "$temp_dir_collected_x86" "$temp_dir_collected_arm" "$target_ext_path"
+    update_id_ext_binary "$target_ext_path" "$target_id_path"
 
-    resign_all_binaries "$target_path"
+    resign_all_binaries "$target_ext_path" 
 }
 
-collect_binary(){
+universal2_collect_binary(){
     local python_version="$1"
-    local python_dir=$PYENV_ROOT/$python_version    
+    local python_dir="$2"    
     local temp_dir="$PYENV_ROOT/temp_dir/${python_version}_temp"
     local target_path_ext="$python_dir/deps"
+    local target_id_path="@rpath/deps"
 
     local minor_version
     minor_version=$(echo "$python_version" | cut -d. -f1,2)
     local python_binary="$python_dir/bin/python${minor_version}"
 
+    $DRY_RUN || mkdir -p "$temp_dir"
+    $DRY_RUN || mkdir -p "$target_path_ext"
+
     path_regex
 
-    if ! lipo -info "$python_binary" | grep -q "fat"; then
-        $DRY_RUN || mkdir -p "$temp_dir"
+    if lipo -info "$python_binary" | grep -q "Non-fat"; then
+        color_echo "INFO" "Collect external dependencies for single binary"     
         local saved_scan_log="$temp_dir/${python_version}_scan.txt"  
-        collect_external_binary "$python_dir" "$target_path_ext" "$saved_scan_log"
+        collect_external_binary "$python_dir" "$target_path_ext" "$target_id_path" "$saved_scan_log"
     else
-        $DRY_RUN || mkdir -p "$temp_dir"
-        $DRY_RUN || mkdir -p "$target_path_ext"
+        color_echo "INFO" "Collect external dependencies for universal binary" 
         local saved_scan_log="$temp_dir/${python_version}_scan_extract.txt"
-        collect_ext_binary_and_merge "$python_dir" "$temp_dir" "$target_path_ext" "$saved_scan_log"
+        collect_ext_binary_and_merge "$python_dir" "$temp_dir" "$target_path_ext" "$target_id_path" "$saved_scan_log"
     fi
 
-     $DRY_RUN || cleanup_temp "$temp_dir"
-    log "INFO" "Successfully collect and updated all fat binaries in $python_dir"
+    # $DRY_RUN || cleanup_temp "$temp_dir"
+    color_echo "INFO" "Successfully collect and updated all fat binaries in $python_dir"
 }

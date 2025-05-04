@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 
 # ========config==============
-source "$(dirname "${BASH_SOURCE[0]}")/pyenv-universal2-config"
+CONFIG_FILE="$(dirname "${BASH_SOURCE[0]}")/pyenv-universal2-config"
+if [[ -f "$CONFIG_FILE" ]]; then
+    source "$CONFIG_FILE"
+else
+    echo "[pyenv-universal2] WARN: Missing config file: $CONFIG_FILE" >&2
+fi
 
 
 # ====== Logging ======
@@ -59,7 +64,7 @@ color_echo() {
 # ====== Global Variable ======
 pyenv_universal2_config_path
 
-VERSION="1.1.0"
+VERSION="1.1.2"
 RELEASE_DATE="2025-02-09"
 PYENV_UNIVERSAL2_REPO="https://github.com/ziprangga/pyenv-universal2"
 DEBUG=false
@@ -71,9 +76,10 @@ SUFFIX=""
 ALIAS=""
 readonly X86_ARCH="x86_64"
 readonly ARM_ARCH="arm64"
-readonly PYENV_ROOT="$(pyenv root)"
+PYENV_ROOT="${PYENV_ROOT:-$(pyenv root)}"
+readonly PYENV_ROOT
 readonly BASE_COMMAND="pyenv-universal2"
-readonly commands=("build" "merge" "arm64" "x86_64" "rpath" "test" "update" "version" "custom-brew" "help")
+readonly commands=("build" "merge" "arm64" "x86_64" "test" "update" "version" "custom-brew" "help")
 
 # ====== Load Core Script ======
 load_core_script() {
@@ -133,11 +139,13 @@ build_command() {
         exit 1
     fi
 
-    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -z $ALIAS ]]; then
-        local custom_suffix="${python_version}-$SUFFIX"
-    elif [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -n $ALIAS ]]; then
-        color_echo "INFO" "Build python fat binary with alias"
-        local custom_suffix="$ALIAS"
+    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false ]]; then
+        if [[ -n $ALIAS ]]; then
+            color_echo "INFO" "Build python fat binary with alias"
+            local custom_suffix="$ALIAS"
+        else
+            local custom_suffix="${python_version}-$SUFFIX"
+        fi
     elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then
         local custom_suffix="${python_version}-universal"
     else
@@ -153,6 +161,39 @@ build_command() {
     fi
 
     build_universal2_python "$python_version" "$custom_suffix" "$no_clean" "$@"
+}
+
+merge_command() {
+    local python_version="$1"
+    shift
+
+    if [[ -z "$python_version" ]]; then
+        color_echo "ERROR" "Error: 'merge' requires at least one argument." >&2
+        exit 1
+    fi
+
+    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false ]]; then
+        if [[ -n $ALIAS ]]; then
+            color_echo "INFO" "Merge python fat binary with alias"
+            local custom_suffix="$ALIAS"
+        else
+            local custom_suffix="${python_version}-$SUFFIX"
+        fi
+    elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then
+        local custom_suffix="${python_version}-universal"
+    else
+        color_echo "INFO" "Merge python fat binary without suffix"
+        local custom_suffix="${python_version}"
+    fi
+
+    local no_clean="$NO_CLEAN"
+
+    if ! declare -F universal2-merge >/dev/null; then
+        log "INFO" "Loading core script for merge python"
+        load_core_script "universal2-merge"
+    fi
+ 
+    universal2_merge "$python_version" "$custom_suffix" "$no_clean"
 }
 
 single_command() {
@@ -172,12 +213,14 @@ single_command() {
         exit 1
     fi
 
-    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -z $ALIAS ]]; then
-        local custom_suffix="${python_version}-$SUFFIX"
-    elif [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -n $ALIAS ]]; then
-        color_echo "INFO" "install python with alias"
-        local custom_suffix="$ALIAS"
-    elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then
+    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false ]]; then
+        if [[ -n $ALIAS ]]; then
+            color_echo "INFO" "Installing Python with alias"
+            local custom_suffix="$ALIAS"
+        else
+            local custom_suffix="${python_version}-$SUFFIX"
+        fi
+    elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then       
         if [[ $arch == "$X86_ARCH" ]]; then
             local custom_suffix="${python_version}-x86"
         elif [[ $arch == "$ARM_ARCH" ]]; then
@@ -186,6 +229,7 @@ single_command() {
             color_echo "ERROR" "Unsupported architecture: $arch"
             exit 1
         fi
+        
     else
         color_echo "INFO" "install python without suffix"
         local custom_suffix="${python_version}"
@@ -209,40 +253,8 @@ x86_64_command() {
     single_command "$X86_ARCH" "$@"
 }
 
-merge_command() {
-    local python_version="$1"
-    shift
-
-    if [[ -z "$python_version" ]]; then
-        color_echo "ERROR" "Error: 'merge' requires at least one argument." >&2
-        exit 1
-    fi
-
-    if [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -z $ALIAS ]]; then
-        local custom_suffix="${python_version}-$SUFFIX"
-    elif [[ -n $SUFFIX && $WITHOUT_SUFFIX = false && -n $ALIAS ]]; then
-        color_echo "INFO" "Merge python fat binary with alias"
-        local custom_suffix="$ALIAS"
-    elif [[ -z $SUFFIX && -z $ALIAS && $WITHOUT_SUFFIX = false ]]; then
-        local custom_suffix="${python_version}-universal"
-    else
-        color_echo "INFO" "Merge python fat binary without suffix"
-        local custom_suffix="${python_version}"
-    fi
-
-    local no_clean="$NO_CLEAN"
-
-    if ! declare -F universal2-merge >/dev/null; then
-        log "INFO" "Loading core script for merge python"
-        load_core_script "universal2-merge"
-    fi
- 
-    universal2_merge "$python_version" "$custom_suffix" "$no_clean" "$@"
-}
-
 test_command() {
     local python_version="$1"
-    shift
 
      if [[ -z "$python_version" ]]; then
         color_echo "ERROR" "Error: 'test' requires at least one argument." >&2
@@ -254,7 +266,31 @@ test_command() {
         load_core_script "universal2-test"
     fi
  
-    universal2_test "$python_version" "$@"
+    universal2_test "$python_version"
+}
+
+collect-deps_command() {
+    local python_version="$1"
+    shift
+
+     if [[ -z "$python_version" ]]; then
+        color_echo "ERROR" "Error: 'collect-deps' requires at least one argument." >&2
+        exit 1
+    fi
+
+    local python_dir
+    if [[ $# -gt 0 ]]; then
+        python_dir="$1"
+    else
+        python_dir="$PYENV_ROOT/versions/$python_version"
+    fi
+
+    if ! declare -F universal2-collect-lib >/dev/null; then
+        log "INFO" "Loading core script for collect dependencies python"
+        load_core_script "universal2-collect-lib"
+    fi
+ 
+    universal2_collect_binary "$python_version" "$python_dir"
 }
 
 rpath_command() {
@@ -266,11 +302,11 @@ rpath_command() {
         exit 1
     fi
 
-    local python_path
+    local python_dir
     if [[ $# -gt 0 ]]; then
-        python_path="$1"
+        python_dir="$1"
     else
-        python_path="$PYENV_ROOT/versions/$python_version"
+        python_dir="$PYENV_ROOT/versions/$python_version"
     fi
 
     if ! declare -F universal2-rpath >/dev/null; then
@@ -278,7 +314,7 @@ rpath_command() {
         load_core_script "universal2-rpath"
     fi
  
-    universal2_rpath "$python_version" "$python_path"
+    universal2_update_rpath "$python_version" "$python_dir"
 }
 
 update_command() {

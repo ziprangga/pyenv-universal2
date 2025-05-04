@@ -14,6 +14,17 @@ merge_binary_or_lib() {
     fi
 }
 
+update_lc_id_dylib(){
+    local lib="$1"
+
+    local base_name
+    base_name=$(basename "$lib")
+    local new_id="@rpath/$base_name"
+
+    log "INFO" "Setting LC_ID_DYLIB for $lib to $new_id"
+    install_name_tool -id "$new_id" "$lib"
+}
+
 merge_ext_lib(){
     local x86_lib_folder="$1"
     local arm_lib_folder="$2"

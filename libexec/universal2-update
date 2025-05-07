@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -e
 
 universal2_update() {
     color_echo "INFO" "Checking for updates to pyenv-universal2..."

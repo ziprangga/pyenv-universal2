@@ -1,22 +1,12 @@
 #!/usr/bin/env bash
+set -e
 
 source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-utility"
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-merge-lib-bin"
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-rpath-updater" 
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-collect-ext-lib"
-
-run_if_not_dry() {
-    if [[ "$DRY_RUN" != "true" ]]; then
-        "$@"
-    else
-        color_echo "INFO" "Dry run mode: skipped: $*"
-    fi
-}
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-core"
 
 universal2_merge() {
     local python_version="$1"
     local custom_suffix="$2"
-    local no_clean="$3"
     local working_path="$PYENV_ROOT/versions"
     local temp_dir="$PYENV_ROOT/temp_dir/${custom_suffix}_temp"
     local output_dir="${working_path}/$custom_suffix"
@@ -43,63 +33,81 @@ universal2_merge() {
         [[ "$DRY_RUN" != "true" ]] && exit 1
     fi
 
-    log "INFO" "Create environment"
+    color_echo "INFO" "Create environment"
     run_if_not_dry rsync -a "$arm_dir/" "$output_dir/"
+    local temp_metadata="$temp_dir/metadata"
     local temp_ext_collected_x86="$temp_dir/ext_lib_x86"
-    local temp_ext_collected_arm="$temp_dir/ext_lib_arm"
-    run_if_not_dry mkdir -p "$temp_dir/" "$target_path_ext" "$temp_ext_collected_x86" "$temp_ext_collected_arm"
+    local temp_int_collected_x86="$temp_dir/int_binary_x86"
+    run_if_not_dry mkdir -p "$temp_dir" "$target_path_ext" "$temp_metadata" "$temp_ext_collected_x86" "$temp_int_collected_x86"
 
-    path_regex
+    color_echo "INFO" "Scan binary & collect external binary"
+    local cache_scanner_target="$temp_metadata/scan_output.txt"
+    local cache_scanner_x86="$temp_metadata/scan_output_x86.txt"
+    local temp_merge_ext_metadata="$temp_metadata/merge_ext.txt"
+    local temp_merge_int_metadata="$temp_metadata/merge_int.txt"
+    local temp_collected_arm_metadata="$temp_metadata/collected_arm.txt"
+    local temp_collected_x86_metadata="$temp_metadata/collected_x86.txt"
+    scan_binary_and_cache "$output_dir" "$cache_scanner_target"
+    scan_binary_and_cache "$x86_dir" "$cache_scanner_x86"
 
-    log "INFO" "Create Fat Binary"
-    if [[ "$DRY_RUN" == "true" ]]; then
-        color_echo "INFO" "Dry run mode, skipping process."
-    else
-        local universal_binaries
-        universal_binaries=$(scan_binaries $output_dir)   
-        for binary in $universal_binaries; do
-            local relative_path="${binary#$output_dir/}"
-            local x86_binary="$x86_dir/$relative_path"
-            local merged_binary="$output_dir/$relative_path"
-            merge_int_bin_lib "$x86_binary" "$binary" "$merged_binary"        
-        done 
-    fi
-    
-    log "INFO" "Collect external dependencies"
-    if [[ "$DRY_RUN" == "true" ]]; then
-        color_echo "INFO" "Dry run mode, skipping process."
-    else
-        local saved_scan_log_output_fat="$temp_dir/${python_version}_scan_output_fat.txt" 
-        scan_and_extract_fat_binary "$output_dir" "$temp_dir" "$saved_scan_log_output_fat"
-        while IFS='|' read -r binary x86_binary arm_binary; do
-            color_echo "INFO" "collecting external binary."
-            process_collect_fat_ext_lib "$x86_binary" "$arm_binary" "$temp_ext_collected_x86" "$temp_ext_collected_arm"
-        done < "$saved_scan_log_output_fat"
+    while IFS=$'\n' read -r binary; do
+        collect_ext_lib "$binary" "$target_path_ext" "$temp_collected_arm_metadata"
+    done < "$cache_scanner_target"
+  
+    while IFS=$'\n' read -r binary; do
+        cp -p "$binary" "$temp_int_collected_x86"
+        collect_ext_lib "$binary" "$temp_ext_collected_x86" "$temp_collected_x86_metadata"
+    done < "$cache_scanner_x86"
 
-        color_echo "INFO" "update external binary rpath"
-        update_ext_lib "$temp_ext_collected_x86" "$target_path_ext"
-        update_ext_lib "$temp_ext_collected_arm" "$target_path_ext"
+    color_echo "INFO" "Update external binary LC_LOAD_DYLIB & LC_RPATH"
+    shopt -s nullglob
+    for ext_lib_x86 in "$temp_ext_collected_x86"/*; do
+        update_lc_load_dylib --binary="$ext_lib_x86" --ext="$target_path_ext"
+        update_lc_rpath --binary="$ext_lib_x86" --ext="$target_path_ext"
+    done
 
-        color_echo "INFO" "merging external binary rpath"
-        merge_ext_lib "$temp_ext_collected_x86" "$temp_ext_collected_arm" "$target_path_ext"
+    for ext_lib_arm in "$target_path_ext"/*; do
+        update_lc_load_dylib --binary="$ext_lib_arm" --ext="$target_path_ext"
+        update_lc_rpath --binary="$ext_lib_arm" --ext="$target_path_ext"
 
-        update_id_ext_binary "$target_path_ext" "@rpath/deps"
+        local relative_path="${ext_lib_arm#$target_path_ext/}"
+        local base_name_ext_lib=$(basename $relative_path)
+        local x86_ext_binary="$temp_ext_collected_x86/$base_name_ext_lib"
+        local merged_binary="$ext_lib_arm"
 
-        while IFS='|' read -r binary x86_binary arm_binary; do
-            color_echo "INFO" "update internal binary rpath"
-            update_int_fat_binary "$x86_binary" "$arm_binary" "$target_path_int" "$target_path_ext"
+        color_echo "INFO" "Merge external binary"
+        merge_binary_or_lib "$x86_ext_binary" "$ext_lib_arm" "$merged_binary" "$temp_merge_ext_metadata"
 
-            color_echo "INFO" "merging internal binary rpath"           
-            merge_int_bin_lib "$x86_binary" "$arm_binary" "$binary"
+        color_echo "INFO" "Update external LC_ID_DYLIB"
+        update_lc_id_dylib "$merged_binary" "@rpath/deps"
+    done
 
-            update_id_int_binary "$binary" "@rpath/lib"
-        done < "$saved_scan_log_output_fat"
+    for x86_int_binary in "$temp_int_collected_x86"/*; do
+        update_lc_load_dylib --binary="$x86_int_binary" --int="$target_path_int" --ext="$target_path_ext"
+        update_lc_rpath --binary="$x86_int_binary" --int="$target_path_int" --ext="$target_path_ext"
+    done
+    shopt -u nullglob
 
-        color_echo "INFO" "re-assign codedesign external binary"
-        resign_all_binaries "$target_path_ext"
-    fi
+    while IFS=$'\n' read -r binary; do
+        update_lc_load_dylib --binary="$binary" --int="$target_path_int" --ext="$target_path_ext"
+        update_lc_rpath --binary="$binary" --int="$target_path_int" --ext="$target_path_ext"
 
-    log "INFO" "test_binary_fat \"$output_dir\""
+        color_echo "INFO" "Merge internal binary"
+        local relative_path="${binary#$output_dir/}"
+        local base_name_binary=$(basename $relative_path)
+        local x86_int_binary="$temp_int_collected_x86/$base_name_binary"
+        local merged_binary="$binary"
+
+        merge_binary_or_lib "$x86_int_binary" "$binary" "$merged_binary" "$temp_merge_int_metadata"
+
+        color_echo "INFO" "Update internal LC_ID_DYLIB"
+        update_lc_id_dylib "$merged_binary" "@rpath/lib"
+    done < "$cache_scanner_target"
+
+    color_echo "INFO" "Resign codesign..."
+    resign_all_binaries "$target_path_ext"
+
+    color_echo "INFO" "test_binary_fat \"$output_dir\""
     test_binary_fat "$output_dir" || {
         if [[ "$DRY_RUN" == "true" ]]; then
                 color_echo "INFO" "Dry run mode, skipping test binary."
@@ -110,20 +118,17 @@ universal2_merge() {
             exit 1
         fi
     }
-
     color_echo "INFO" "Cleaning up temporary installations..." 
     if [[ "$DRY_RUN" == "true" ]]; then
             color_echo "INFO" "Dry run mode, skipping cleanup of temporary directories."
     else
-        if [[ $no_clean == false ]]; then               
+        if [[ $NO_CLEAN == false ]]; then               
             cleanup_temp "$x86_dir"
             cleanup_temp "$arm_dir"
             cleanup_temp "$temp_dir"
         else
             cleanup_temp "$temp_dir"
         fi
-        color_echo "INFO" "cleanup temporary file"
     fi
-
     color_echo "INFO" "Process completed"
 }

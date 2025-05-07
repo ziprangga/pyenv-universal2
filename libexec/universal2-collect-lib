@@ -1,43 +1,139 @@
 #!/usr/bin/env bash
+set -e
+
 source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-utility"
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-merge-lib-bin"
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-rpath-updater" 
-source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-collect-ext-lib" 
+source "$(dirname "${BASH_SOURCE[0]}")/tools/u2-core"
 
-collect_external_binary(){
-    local python_dir="$1"    
-    local target_ext_path="$2"
-    local target_id_path="$3"
-    local saved_scan_log="$4"
+single_collected(){
+    local python_dir="$1"   
+    local temp_dir="$2"
+    local target_path_ext="$3"
+    local target_id_ext_path="$4"
 
-    scan_binary_and_cache "$python_dir" "$saved_scan_log"
-    while IFS= read -r binary; do
-        process_collect_single_ext_lib "$binary" "$target_ext_path"
-    done < "$saved_scan_log"
-    update_ext_lib "$target_ext_path" "$target_ext_path"
-    update_id_ext_binary "$target_ext_path" "$target_id_path"
-    resign_all_binaries "$target_ext_path"
+    color_echo "INFO" "Create environment"
+    local temp_metadata="$temp_dir/metadata"
+    local temp_collected_binary="$temp_dir/collected_dir"
+    run_if_not_dry mkdir -p "$temp_dir" "$target_path_ext" "$temp_metadata" "$temp_collected_binary"
+
+    color_echo "INFO" "Scan binary & collect external binary"
+    local cache_scanner="$temp_metadata/scanner.txt"
+    local temp_merge_metadata="$temp_metadata/merge_bin.txt"
+    local temp_collected_metadata="$temp_metadata/collected_bin.txt"
+    scan_binary_and_cache "$python_dir" "$cache_scanner"
+    
+    while IFS=$'\n' read -r binary; do
+        collect_ext_lib "$binary" "$target_path_ext" "$temp_collected_arm_metadata"
+    done < "$cache_scanner"
+
+    color_echo "INFO" "Update external binary LC_LOAD_DYLIB, LC_RPATH, & LC_ID_DYLIB"
+    shopt -s nullglob
+    for ext_bin in "$target_path_ext"/*; do
+        update_lc_load_dylib --binary="$ext_bin" --ext="$target_path_ext"
+        update_lc_rpath --binary="$ext_bin" --ext="$target_path_ext"
+        update_lc_id_dylib "$ext_bin" "$target_id_ext_path"
+    done
+    shopt -u nullglob
+
+    color_echo "INFO" "Update internal binary LC_LOAD_DYLIB, LC_RPATH, & LC_ID_DYLIB"
+    while IFS=$'\n' read -r binary; do
+        update_lc_load_dylib --binary="$binary" --ext="$target_path_ext"
+        update_lc_rpath --binary="$binary" --ext="$target_path_ext"
+    done < "$cache_scanner"
+
+    color_echo "INFO" "Resign codesign..."
+    resign_all_binaries "$target_path_ext"
 }
 
-collect_ext_binary_and_merge(){
-    local python_dir="$1"    
+fat_collected(){
+    local python_dir="$1"   
     local temp_dir="$2"
-    local target_ext_path="$3"
-    local target_id_path="$4"
-    local saved_scan_log="$5"
+    local target_path_ext="$3"
+    local target_id_ext_path="$4"
+    local target_path_int="$5"
+    local target_id_int_path="$6"
 
-    local temp_dir_collected_x86="$temp_dir/ext_lib_x86"
-    local temp_dir_collected_arm="$temp_dir/ext_lib_arm"
-    scan_and_extract_fat_binary "$python_dir" "$temp_dir" "$saved_scan_log"
-    while IFS='|' read -r binary x86_binary arm_binary; do
-        process_collect_fat_ext_lib "$x86_binary" "$arm_binary" "$temp_dir_collected_x86" "$temp_dir_collected_arm"
-    done < "$saved_scan_log"
-    update_ext_lib "$temp_dir_collected_x86" "$target_ext_path"
-    update_ext_lib "$temp_dir_collected_arm" "$target_ext_path"
-    merge_ext_lib "$temp_dir_collected_x86" "$temp_dir_collected_arm" "$target_ext_path"
-    update_id_ext_binary "$target_ext_path" "$target_id_path"
+    color_echo "INFO" "Create environment"
+    local temp_metadata="$temp_dir/metadata"
+    local temp_ext_collected_x86="$temp_dir/ext_lib_x86"
+    local temp_int_collected_arm="$temp_dir/int_binary_arm"
+    local temp_int_collected_x86="$temp_dir/int_binary_x86"
+    run_if_not_dry mkdir -p "$temp_dir" "$target_path_ext" "$temp_metadata" "$temp_ext_collected_x86" "$temp_int_collected_arm" "$temp_int_collected_x86"
 
-    resign_all_binaries "$target_ext_path" 
+    color_echo "INFO" "Scan binary"
+    local cache_scanner="$temp_metadata/scan_python.txt"
+    local temp_merge_ext_metadata="$temp_metadata/merge_ext.txt"
+    local temp_merge_int_metadata="$temp_metadata/merge_int.txt"
+    local temp_collected_arm_metadata="$temp_metadata/collected_arm.txt"
+    local temp_collected_x86_metadata="$temp_metadata/collected_x86.txt"
+    scan_binary_and_cache "$python_dir" "$cache_scanner"
+
+    color_echo "INFO" "Extract fat binary"
+    while IFS=$'\n' read -r binary; do
+        extract_fat_binary "$binary" "$temp_int_collected_arm" "$temp_int_collected_x86"
+    done < "$cache_scanner"
+
+    color_echo "INFO" "collect external binary"
+    shopt -s nullglob
+    for binary in "$temp_int_collected_arm"/*; do
+        collect_ext_lib "$binary" "$target_path_ext" "$temp_collected_arm_metadata"
+    done
+  
+    for binary in "$temp_int_collected_x86"/*; do
+        collect_ext_lib "$binary" "$temp_ext_collected_x86" "$temp_collected_x86_metadata"
+    done
+
+    color_echo "INFO" "Update external binary LC_LOAD_DYLIB & LC_RPATH"
+    for ext_lib_x86 in "$temp_ext_collected_x86"/*; do
+        update_lc_load_dylib --binary="$ext_lib_x86" --ext="$target_path_ext"
+        update_lc_rpath --binary="$ext_lib_x86" --ext="$target_path_ext"
+    done
+
+    for ext_lib_arm in "$target_path_ext"/*; do
+        update_lc_load_dylib --binary="$ext_lib_arm" --ext="$target_path_ext"
+        update_lc_rpath --binary="$ext_lib_arm" --ext="$target_path_ext"
+
+        local relative_path="${ext_lib_arm#$target_path_ext/}"
+        local base_name_ext_lib=$(basename $relative_path)
+        local x86_ext_binary="$temp_ext_collected_x86/$base_name_ext_lib"
+        local merged_binary="$ext_lib_arm"
+
+        color_echo "INFO" "Merge external binary"
+        merge_binary_or_lib "$x86_ext_binary" "$ext_lib_arm" "$merged_binary" "$temp_merge_ext_metadata"
+
+        color_echo "INFO" "Update external LC_ID_DYLIB"
+        update_lc_id_dylib "$merged_binary" "$target_id_ext_path"
+    done
+
+    color_echo "INFO" "Update internal binary LC_LOAD_DYLIB & LC_RPATH"
+    for x86_int_binary in "$temp_int_collected_x86"/*; do
+        update_lc_load_dylib --binary="$x86_int_binary" --int="$target_path_int" --ext="$target_path_ext"
+        update_lc_rpath --binary="$x86_int_binary" --int="$target_path_int" --ext="$target_path_ext"
+    done
+
+    for arm_int_binary in "$temp_int_collected_arm"/*; do
+        update_lc_load_dylib --binary="$arm_int_binary" --int="$target_path_int" --ext="$target_path_ext"
+        update_lc_rpath --binary="$arm_int_binary" --int="$target_path_int" --ext="$target_path_ext"
+    done
+    shopt -u nullglob
+
+    while IFS=$'\n' read -r binary; do
+        color_echo "INFO" "Merge internal binary"
+        local relative_path="${binary#$python_dir/}"
+        local base_name_binary=$(basename $relative_path)
+        local arm_int_binary="$temp_int_collected_arm/$base_name_binary"
+        local x86_int_binary="$temp_int_collected_x86/$base_name_binary"
+        local merged_binary="$binary"
+
+        merge_binary_or_lib "$x86_int_binary" "$arm_int_binary" "$merged_binary" "$temp_merge_int_metadata"
+
+        color_echo "INFO" "Update internal LC_ID_DYLIB"
+        update_lc_id_dylib "$merged_binary" "$target_id_int_path"
+    done < "$cache_scanner"
+
+    color_echo "INFO" "Resign codesign..."
+    resign_all_binaries "$target_path_ext"
+
+    color_echo "INFO" "All process completed"
 }
 
 universal2_collect_binary(){
@@ -45,7 +141,9 @@ universal2_collect_binary(){
     local python_dir="$2"    
     local temp_dir="$PYENV_ROOT/temp_dir/${python_version}_temp"
     local target_path_ext="$python_dir/deps"
-    local target_id_path="@rpath/deps"
+    local target_id_ext_path="@rpath/deps"
+    local target_path_int="$python_dir/lib"
+    local target_id_int_path="@rpath/lib"
 
     local minor_version
     minor_version=$(echo "$python_version" | cut -d. -f1,2)
@@ -54,18 +152,14 @@ universal2_collect_binary(){
     $DRY_RUN || mkdir -p "$temp_dir"
     $DRY_RUN || mkdir -p "$target_path_ext"
 
-    path_regex
-
     if lipo -info "$python_binary" | grep -q "Non-fat"; then
-        color_echo "INFO" "Collect external dependencies for single binary"     
-        local saved_scan_log="$temp_dir/${python_version}_scan.txt"  
-        collect_external_binary "$python_dir" "$target_path_ext" "$target_id_path" "$saved_scan_log"
+        color_echo "INFO" "Collect external dependencies for single binary"  
+        single_collected "$python_dir" "$temp_dir" "$target_path_ext" "$target_id_ext_path"
     else
         color_echo "INFO" "Collect external dependencies for universal binary" 
-        local saved_scan_log="$temp_dir/${python_version}_scan_extract.txt"
-        collect_ext_binary_and_merge "$python_dir" "$temp_dir" "$target_path_ext" "$target_id_path" "$saved_scan_log"
+        fat_collected "$python_dir" "$temp_dir" "$target_path_ext" "$target_id_ext_path" "$target_path_int" "$target_id_int_path"
     fi
 
-    # $DRY_RUN || cleanup_temp "$temp_dir"
+    $DRY_RUN || cleanup_temp "$temp_dir"
     color_echo "INFO" "Successfully collect and updated all fat binaries in $python_dir"
 }

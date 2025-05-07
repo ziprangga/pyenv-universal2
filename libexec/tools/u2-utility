@@ -1,108 +1,20 @@
 #!/usr/bin/env bash
+set -e
 
-path_regex() {
-    if [[ -z "$ARM_BREW_DIR" || -z "$X86_BREW_DIR" ]]; then
-        color_echo "ERROR" "ARM_BREW_DIR or X86_BREW_DIR not set."
-        return 1
+run_if_not_dry() {
+    if [[ "$DRY_RUN" != "true" ]]; then
+        "$@"
+    else
+        color_echo "INFO" "Dry run mode: skipped: $*"
     fi
-    
-    escape_path() {
-        echo "$1" | sed 's/[.[\*^$(){}+?|]/\\&/g'
-    }
-
-    local arm_re x86_re
-    arm_re=$(escape_path "$ARM_BREW_DIR")
-    x86_re=$(escape_path "$X86_BREW_DIR")
-
-    BREW_PATH_REGEX="^(${arm_re}|${x86_re})/(lib|opt|Cellar)"
-}
-
-scan_binaries(){
-    local python_dir="$1"
-
-    find "$python_dir" -type f \( -name "*.dylib" -o -name "*.so" \) -print \
-        -o -type f -exec sh -c '
-            for file; do
-                if file "$file" | grep -qE "Mach-O.*executable"; then
-                    echo "$file"
-                fi
-            done
-        ' sh {} +   
-}
-
-scan_and_extract_fat_binary(){
-    local python_dir="$1"
-    local temp_dir="$2"
-    local output_file="$3"
-
-    : > "$output_file"
-
-    local output_data=""
-
-    while IFS= read -r binary; do
-        [[ -f "$binary" ]] || continue
-     
-        color_echo "INFO" "Processing binary: $binary"
-
-        local binary_name
-        binary_name=$(basename "$binary")
-
-        if ! lipo -info "$binary" | grep -q "fat"; then
-            log "INFO" "$binary is not a fat binary, skipping extraction."
-            continue
-        fi
-
-        local x86_binary="$temp_dir/${binary_name}_x86"
-        local arm_binary="$temp_dir/${binary_name}_arm"
-        if [[ ! -f "$x86_binary" || ! -f "$arm_binary" ]]; then
-            lipo -extract x86_64 "$binary" -output "$x86_binary"
-            lipo -extract arm64 "$binary" -output "$arm_binary"
-        fi
-        output_data+="$binary|$x86_binary|$arm_binary"$'\n'      
-    done < <(scan_binaries "$python_dir")
-    echo -n "$output_data" >> "$output_file"
-}
-
-scan_binary_and_cache(){
-    local python_dir="$1"
-    local output_file="$2"
-
-    : > "$output_file"
-
-    local output_data=""
-
-    while IFS= read -r binary; do
-        [[ -f "$binary" ]] || continue
-
-        color_echo "INFO" "Processing binary: $binary"
-
-        local binary_name
-        binary_name=$(basename "$binary")
-        if ! lipo -info "$binary" | grep -q "fat"; then
-            log "INFO" "$binary is not a fat binary, skipping extraction."
-            continue
-        fi
-        output_data+="$binary"          
-    done < <(scan_binaries "$python_dir")
-    echo -n "$output_data" >> "$output_file"
-}
-
-resign_all_binaries() {
-    local binary_dir="$1"
-    find "$binary_dir" -type f \( -name "*.dylib" -o -name "*.so" -o -name "python3*" \) | while read -r file; do
-        if codesign --force --sign - "$file"; then
-            log "INFO" "Re-signed $file"
-        else
-            color_echo "WARN" "Failed to sign $file"
-        fi
-    done
 }
 
 cleanup_temp() {
     local delete_item="$1"
 
     if [[ -z "$delete_item" || "$delete_item" == "/" ]]; then
-        color_echo "ERROR" "Refusing to delete an empty or root path: '$delete_item'"
+        log "ERROR" "Refusing to delete an empty or root path: '$delete_item'"
+        color_echo "ERROR" "Refusing to delete an empty or root path"
         return 1
     fi
 
@@ -128,13 +40,6 @@ test_binary_for_arch() {
     local arch="$2"
     local binary="${python_path}/bin/python"
 
-    # if arch -$arch "${python_path}/bin/python" --version; then
-    #     log "INFO" "$arch binary test passed successfully."
-    #     return 0
-    # else
-    #     log "WARN" "Warning: $arch binary test failed."
-    #     return 1
-    # fi
     if [[ ! -x "$binary" ]]; then
         log "WARN" "Binary not found or not executable: $binary"
         return 1
@@ -182,16 +87,16 @@ test_binary_conditional() {
     fi
 
     if [[ -z "$arm_test_failed" && -z "$x86_test_failed" ]]; then
-        log "INFO" "Binary is universal2: both ARM64 and x86_64 are present."
+        log "INFO" "Binary is universal2: both ARM64($arm_test_failed) and x86_64($x86_test_failed) are present."
         color_echo "INFO" "Binary is universal2: both ARM64 and x86_64 are present."
     elif [[ -z "$arm_test_failed" ]]; then
-        log "INFO" "Binary is ARM64-only."
+        log "INFO" "Binary is ARM64($arm_test_failed)."
         color_echo "INFO" "Binary is ARM64-only."
     elif [[ -z "$x86_test_failed" ]]; then
-        log "INFO" "Binary is x86_64-only."
+        log "INFO" "Binary is x86_64($x86_test_failed)."
         color_echo "INFO" "Binary is x86_64-only."
     else
-        log "ERROR" "Binary is invalid: neither ARM64 nor x86_64 present."
+        log "ERROR" "Binary is invalid: neither ARM64($arm_test_failed) nor x86_64($x86_test_failed) present."
         color_echo "ERROR" "Binary is invalid: neither ARM64 nor x86_64 present."
         return 1
     fi

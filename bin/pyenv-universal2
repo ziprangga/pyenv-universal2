@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-
+set -e
 # ========config==============
 CONFIG_FILE="$(dirname "${BASH_SOURCE[0]}")/pyenv-universal2-config"
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -79,7 +79,7 @@ readonly ARM_ARCH="arm64"
 PYENV_ROOT="${PYENV_ROOT:-$(pyenv root)}"
 readonly PYENV_ROOT
 readonly BASE_COMMAND="pyenv-universal2"
-readonly commands=("build" "merge" "arm64" "x86_64" "test" "update" "version" "custom-brew" "help")
+readonly commands=("build" "merge" "arm64" "x86_64" "collect-deps" "rpath-update" "test" "update" "version" "custom-brew" "help")
 
 # ====== Load Core Script ======
 load_core_script() {
@@ -126,7 +126,6 @@ parse_global_options() {
 # ====== Function ======
 build_command() {
     local python_version="$1"
-    shift
 
     if [[ -z "$python_version" ]]; then
         color_echo "ERROR" "Error: 'build' requires a Python version as an argument." >&2
@@ -153,19 +152,16 @@ build_command() {
         local custom_suffix="${python_version}"
     fi
 
-    local no_clean="$NO_CLEAN"
-
     if ! declare -F universal2-build >/dev/null; then
         log "INFO" "Loading core script for fat binary build"
         load_core_script "universal2-build"
     fi
 
-    build_universal2_python "$python_version" "$custom_suffix" "$no_clean" "$@"
+    build_universal2_python "$python_version" "$custom_suffix"
 }
 
 merge_command() {
     local python_version="$1"
-    shift
 
     if [[ -z "$python_version" ]]; then
         color_echo "ERROR" "Error: 'merge' requires at least one argument." >&2
@@ -186,14 +182,12 @@ merge_command() {
         local custom_suffix="${python_version}"
     fi
 
-    local no_clean="$NO_CLEAN"
-
     if ! declare -F universal2-merge >/dev/null; then
         log "INFO" "Loading core script for merge python"
         load_core_script "universal2-merge"
     fi
  
-    universal2_merge "$python_version" "$custom_suffix" "$no_clean"
+    universal2_merge "$python_version" "$custom_suffix"
 }
 
 single_command() {
@@ -293,12 +287,26 @@ collect-deps_command() {
     universal2_collect_binary "$python_version" "$python_dir"
 }
 
-rpath_command() {
+rpath-update_command() {
     local python_version="$1"
     shift
 
+    local only_int="false"
+    local only_ext="false"
+
+    for arg in "$@"; do
+        case $arg in
+            --int=*) only_int="${arg#*=}" ;;
+            --ext=*) only_ext="${arg#*=}" ;;
+            *)
+                log "WARN" "Unknown argument: $arg"
+                return 1
+                ;;
+        esac
+    done
+
      if [[ -z "$python_version" ]]; then
-        color_echo "ERROR" "Error: 'rpath' requires at least one argument." >&2
+        color_echo "ERROR" "Error: 'rpath' requires at least one argument (python version)." >&2
         exit 1
     fi
 
@@ -314,7 +322,7 @@ rpath_command() {
         load_core_script "universal2-rpath"
     fi
  
-    universal2_update_rpath "$python_version" "$python_dir"
+    universal2_update_rpath "$python_version" "$python_dir" --int="$only_int" --ext="$only_ext"
 }
 
 update_command() {

@@ -40,7 +40,6 @@ scan_binary_and_cache(){
         [[ -f "$binary" ]] || continue
 
         log "INFO" "Processing binary: $binary"
-        color_echo "DEBUG" "Processing binary: $binary"
 
         local binary_name
         binary_name=$(basename "$binary")
@@ -77,7 +76,6 @@ extract_fat_binary(){
     local arm_binary="$target_arm_extract_dir/$binary_name"
     if [[ ! -f "$x86_binary" || ! -f "$arm_binary" ]]; then
         log "INFO" "Extracting $binary to $x86_binary and $arm_binary"
-        color_echo "DEBUG" "Extracted binary of arm & x86 for $binary"
         lipo -extract x86_64 "$binary" -output "$x86_binary"
         lipo -extract arm64 "$binary" -output "$arm_binary"
     else
@@ -94,10 +92,8 @@ safe_replace_load_dylib() {
     local status=$?
     if [[ $status -ne 0 ]]; then
         log "ERROR" "install_name_tool failed with status $status for binary $binary"
-        color_echo "ERROR" "Failed to change LC_LOAD_DYLIB"
     else
         log "INFO" "Successfully updated $old_path to $new_path in $binary"
-        color_echo "INFO" "Success to change LC_LOAD_DYLIB"
     fi
 
     return $status
@@ -186,10 +182,8 @@ safe_replace_rpath() {
 
     if [[ $status -ne 0 ]]; then
         log "ERROR" "install_name_tool failed with status $status for rpath change in binary $binary"
-        color_echo "ERROR" "Failed to update LC_RPATH"
     else
         log "INFO" "Successfully updated rpath: $old_rpath -> $new_rpath in $binary"
-        color_echo "INFO" "Success to update LC_RPATH"
     fi
     
     return $status
@@ -307,8 +301,7 @@ collect_ext_lib(){
     libs=$(otool -L "$binary" | awk 'NR>1 {print $1}' | grep -E "$BREW_PATH_REGEX" || true)
 
     if [[ -n "$libs" ]]; then
-        color_echo "INFO" "Found binary: $binary"
-
+        log "INFO" "Found binary: $binary"
         while IFS= read -r lib; do
             log "INFO" "Binary $binary is linked with library: $lib"
         done <<< "$libs"
@@ -396,19 +389,17 @@ merge_binary_or_lib() {
     lipo -create "$arm_binary" "$x86_binary" -output "$merged_binary"
     if [[ $? -eq 0 ]]; then
         log "INFO" "Successfully merged $arm_binary and $x86_binary into $merged_binary"
-        color_echo "INFO" "Successfully merged binaries"
-
         echo "$merged_binary" >> "$seen_binaries"
     else
         log "ERROR" "Failed to merge binaries: $arm_binary and $x86_binary"
-         color_echo "ERROR" "Failed to merge binaries"
+        color_echo "ERROR" "Failed to merge binaries"
         return 1
     fi
 
     local dir_path
     dir_path=$(dirname "$merged_binary")
 
-    color_echo "INFO" "Check & create symlink"
+    log "INFO" "Check & create symlink"
     for lib in "$arm_binary" "$x86_binary"; do
         local lib_dir
         lib_dir=$(dirname "$lib")
@@ -440,7 +431,6 @@ resign_all_binaries() {
                 log "INFO" "Re-signed $file"
             else
                 log "WARN" "Failed to sign $file"
-                color_echo "WARN" "Failed to sign: $file"
             fi
         done
     elif [[ -f "$binary_dir" ]]; then
@@ -448,10 +438,9 @@ resign_all_binaries() {
             log "INFO" "Re-signed $binary_dir"
         else
             log "WARN" "Failed to sign $binary_dir"
-            color_echo "WARN" "Failed to sign: $binary_dir"
         fi
     else
         log "ERROR" "$binary_dir is neither a valid file nor a directory."
-        color_echo "ERROR" "$binary_dir is neither a valid file nor a directory."
+        color_echo "ERROR" "Failed to Re-sign binary"
     fi
 }

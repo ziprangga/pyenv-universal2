@@ -23,7 +23,7 @@ else
     eval "$(/usr/local/bin/brew shellenv)"
 fi
 
-# Optional: Use any alias you prefer for safety when using Homebrew
+# Optional: Use any alias you prefer for safety when using Homebrew with default installation
 alias brew-arm='/opt/homebrew/bin/brew'
 alias brew-x86='arch -x86_64 /usr/local/bin/brew'
 ```

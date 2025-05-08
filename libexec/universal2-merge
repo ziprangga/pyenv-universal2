@@ -88,11 +88,11 @@ universal2_merge() {
     done
     shopt -u nullglob
 
+    color_echo "INFO" "Merge internal binary"
     while IFS=$'\n' read -r binary; do
         update_lc_load_dylib --binary="$binary" --int="$target_path_int" --ext="$target_path_ext"
         update_lc_rpath --binary="$binary" --int="$target_path_int" --ext="$target_path_ext"
-
-        color_echo "INFO" "Merge internal binary"
+     
         local relative_path="${binary#$output_dir/}"
         local base_name_binary=$(basename $relative_path)
         local x86_int_binary="$temp_int_collected_x86/$base_name_binary"

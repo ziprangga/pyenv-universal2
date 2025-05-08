@@ -12,8 +12,7 @@ single_collected(){
 
     color_echo "INFO" "Create environment"
     local temp_metadata="$temp_dir/metadata"
-    local temp_collected_binary="$temp_dir/collected_dir"
-    run_if_not_dry mkdir -p "$temp_dir" "$target_path_ext" "$temp_metadata" "$temp_collected_binary"
+    run_if_not_dry mkdir -p "$temp_dir" "$target_path_ext" "$temp_metadata"
 
     color_echo "INFO" "Scan binary & collect external binary"
     local cache_scanner="$temp_metadata/scanner.txt"
@@ -22,7 +21,7 @@ single_collected(){
     scan_binary_and_cache "$python_dir" "$cache_scanner"
     
     while IFS=$'\n' read -r binary; do
-        collect_ext_lib "$binary" "$target_path_ext" "$temp_collected_arm_metadata"
+        collect_ext_lib "$binary" "$target_path_ext" "$temp_collected_metadata"
     done < "$cache_scanner"
 
     color_echo "INFO" "Update external binary LC_LOAD_DYLIB, LC_RPATH, & LC_ID_DYLIB"
